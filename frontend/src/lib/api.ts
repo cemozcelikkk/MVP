@@ -8,10 +8,15 @@
  */
 import axios from "axios";
 
-// Vite dev sunucusunda .env.local ile override edilebilir
-// (VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1).
+// Ortam değişkeniyle override edilebilir (Vercel proje ayarları ya da .env.local):
+// - VITE_API_BASE_URL: tam API yolu (örn. https://api.ornek.com/api/v1 veya /api/v1)
+// - VITE_API_URL: sadece backend adresi (örn. https://api.ornek.com) - /api/v1 eklenir
+// İkisi de yoksa lokal backend'e gider. `||` kullanıyoruz ki boş bırakılmış
+// bir değişken de varsayılana düşsün.
+const API_ORIGIN_ENV = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, "");
 export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
+  import.meta.env.VITE_API_BASE_URL ||
+  (API_ORIGIN_ENV ? `${API_ORIGIN_ENV}/api/v1` : "http://127.0.0.1:8000/api/v1");
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
