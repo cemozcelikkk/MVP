@@ -1,0 +1,16 @@
+**/node_modules/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mail-outbox/
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.production.example
+!**/.env.production-smoke.example
+frontend/dist/
+backend/uploads/
+backups/
+deploy/backups/
+deploy/smoke-result.json

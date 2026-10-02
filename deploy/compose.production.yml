@@ -1,0 +1,100 @@
+name: karavantr-pilot
+
+x-api: &api
+  image: karavantr-pilot-api:local
+  build:
+    context: ../backend
+    dockerfile: Dockerfile.production
+  env_file: ${APP_ENV_FILE:-.env.production}
+  environment:
+    ENVIRONMENT: production
+    DATABASE_URL: postgresql+asyncpg://karavantr:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@db:5432/karavantr_db
+    UPLOAD_DIR: /app/uploads
+    STORAGE_BACKEND: local
+    RATE_LIMIT_ENABLED: "true"
+    FORWARDED_ALLOW_IPS: 172.29.41.254
+  networks: [private]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: karavantr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: karavantr_db
+    volumes: [database:/var/lib/postgresql/data]
+    networks: [private]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U karavantr -d karavantr_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  migrate:
+    <<: *api
+    command: [python, -m, alembic, upgrade, head]
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+
+  api:
+    <<: *api
+    restart: unless-stopped
+    volumes: [uploads:/app/uploads]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      db: {condition: service_healthy}
+
+  web:
+    image: karavantr-pilot-web:local
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.production
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL required}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes: [caddy-data:/data, caddy-config:/config]
+    networks:
+      private: {ipv4_address: 172.29.41.254}
+    depends_on:
+      api: {condition: service_healthy}
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  backup:
+    image: postgis/postgis:16-3.4
+    profiles: [tools]
+    entrypoint: [sh, /tools/backup.sh]
+    environment:
+      PGHOST: db
+      PGUSER: karavantr
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      PGDATABASE: karavantr_db
+    volumes:
+      - ./tools:/tools:ro
+      - ./backups:/backups
+      - uploads:/uploads:ro
+    networks: [private]
+    depends_on:
+      db: {condition: service_healthy}
+
+networks:
+  private:
+    ipam:
+      config: [{subnet: 172.29.41.0/24}]
+volumes:
+  database:
+  uploads:
+  caddy-data:
+  caddy-config:

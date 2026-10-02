@@ -1,0 +1,53 @@
+name: karavantr
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: karavantr_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: karavantr
+      POSTGRES_PASSWORD: karavantr
+      POSTGRES_DB: karavantr_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - karavantr_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U karavantr -d karavantr_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: karavantr_api
+    restart: unless-stopped
+    environment:
+      # Container-içi iletişim: "localhost" değil, Postgres servisinin
+      # container_name'i - aynı compose ağında DNS ile çözülür. Diğer tüm
+      # ayarlar (SECRET_KEY, CORS_ORIGINS, STORAGE_BACKEND, ...) app/core/
+      # config.py'deki makul varsayılanlardan veya bind-mount edilen
+      # backend/.env dosyasından gelir; buradaki DATABASE_URL, .env'deki
+      # (localhost'a işaret eden) değeri OS env var önceliğiyle ezer.
+      DATABASE_URL: postgresql+asyncpg://karavantr:karavantr@karavantr_postgres:5432/karavantr_db
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    volumes:
+      # Kod senkronizasyonu: host'ta yapılan değişiklik --reload ile anında
+      # yansır. backend/uploads/ zaten bu mount'un bir alt dizini olduğu
+      # için (host'ta fiziksel olarak orada durduğu için) ayrıca ikinci bir
+      # volume tanımlamaya gerek yok; aynı yolu tekrar bağlamak sadece
+      # gereksiz bir üst-üste binme (shadow mount) olurdu.
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  karavantr_pgdata:
+    name: karavantr_pgdata

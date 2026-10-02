@@ -1,0 +1,331 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Merkezi tasarım tokenları - TEK doğruluk kaynağı. `tailwind.config.js`
+ * bu değişkenleri Tailwind utility sınıflarına bağlar; hiçbir bileşen ham
+ * hex kullanmaz. Değerler "R G B" (boşluk ayraçlı, # yok) formatında -
+ * Tailwind'in `rgb(var(--x) / <alpha-value>)` deseni bunu gerektirir
+ * (opaklık varyantlarının, ör. `bg-accent-green/10`, çalışabilmesi için).
+ *
+ * v3 "açık hava" paleti: çam gecesi (harita/hero), kum (ürün kabuğu),
+ * çam yeşili (birincil eylem), adaçayı (olumlu veri: su/elektrik var),
+ * toprak (yol/zemin verisi), okra (seçim), pas (SADECE gerçek uyarı).
+ * Token ADLARI v2 ile aynı - bileşenlerdeki sınıflar değişmeden yeni
+ * paleti alır.
+ */
+:root {
+  /* Harita/hero zemini - çam gecesi (#15211B) */
+  --map-bg: 21 33 27;
+
+  /* Kum: üst bar, sol panel, modaller (#F4EFE3 / #E3D6BC) - yeni açık/canlı
+     harita zeminiyle (CARTO Voyager, ~#FBF8F3) bütünleşsin diye v3'ten daha
+     soluk/off-white; kartlar için neredeyse beyaz kum (#FAF7F0) */
+  --surface-primary: 244 239 227;
+  --surface-secondary: 227 214 188;
+  --surface-raised: 250 247 240;
+  --border-light: 219 208 185;
+
+  /* Çam: harita üstü yüzen araçlar - zoom, pin, küme, rozet (#1E3027 / #283D32) */
+  --surface-dark: 30 48 39;
+  --surface-dark-raised: 40 61 50;
+  --border-dark: 58 82 69;
+
+  /* Metin (#22261E / #6A6552 kum üzerinde, #F1EADB / #AEB7A6 çam üzerinde) */
+  --text-primary: 34 38 30;
+  --text-secondary: 106 101 82;
+  --text-on-dark: 241 234 219;
+  --text-on-dark-muted: 174 183 166;
+
+  /* Vurgular */
+  --accent-green: 47 90 67; /* #2F5A43 çam yeşili - birincil eylem */
+  --accent-green-hover: 36 73 53; /* #244935 */
+  --accent-sage: 141 163 133; /* #8DA385 adaçayı - olumlu veri rozetleri */
+  --accent-earth: 123 85 54; /* #7B5536 toprak - yol/zemin verisi */
+  --accent-brass: 181 137 58; /* #B5893A okra - seçili durum */
+  --warning-rust: 165 69 44; /* #A5452C pas - SADECE gerçek uyarı/risk */
+  --neutral-grey: 138 133 117; /* #8A8575 */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(var(--map-bg));
+  color: rgb(var(--text-primary));
+  font-family: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01";
+}
+
+/* Teknik veriler (rakım, ölçü, sayaç) artık monospace değil - aynı gövde
+   ailesinin tabular rakamları: hizalı sütunlar, saha ekipmanı hissi yok. */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.font-display {
+  font-optical-sizing: auto;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--accent-brass));
+  outline-offset: 2px;
+}
+
+/* Dokunma hedefi min. ~44px (bkz. görev tanımı) - bileşenler `min-h-touch`
+   Tailwind sınıfını kullanır; bu genel kural yalnızca fallback. */
+button,
+a {
+  touch-action: manipulation;
+}
+
+/* --- Harita üzeri yüzen teknik araçlar (zoom, sayaç rozeti, "Nokta Ekle")
+   ortak yüzeyi: açık harita zemininin ÜZERİNDE net bir kontrast için hafif
+   kum yüzey, 1px kenarlık, kontrollü gölge. Glow/blur yok. --- */
+.map-float-surface {
+  background-color: rgb(var(--surface-raised) / 0.97);
+  border: 1px solid rgb(var(--border-light));
+  box-shadow: 0 2px 10px rgba(21, 33, 27, 0.18);
+}
+
+/* --- Kategori piktogram pini: 30x30 kare aparat, tam daire DEĞİL - hafif
+   kavisli köşeli teknik/topografik işaretçi. Zemin/kenarlık rengi kategoriye
+   göre `--pin-fill`/`--pin-border` custom property'leriyle gelir (bkz.
+   lib/pinStyle.ts). Tıklama alanı görünenden büyük (bkz. ::before). --- */
+.spot-pin {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+  background-color: var(--pin-fill, rgb(var(--surface-dark-raised)));
+  border: 1px solid var(--pin-border, rgb(var(--border-dark)));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Görünen ikon 30px ama dokunma/tıklama alanı ~44px - görev tanımındaki
+   "ikonun görünür alanından biraz büyük" kuralı. */
+.spot-pin::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.spot-pin:hover {
+  filter: brightness(1.15);
+}
+.spot-pin:focus-visible {
+  outline: 2px solid rgb(var(--accent-brass));
+  outline-offset: 2px;
+}
+
+.spot-pin__icon {
+  display: flex;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+.spot-pin__icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* --- Ciddi aktif saha uyarısı: sağ üst köşeye iliştirilen küçük pas
+   kiremiti kare - SADECE gerçek uyarı/risk durumunda (bkz. lib/pinStyle.ts
+   hasActiveWarning, karar backend'de). Glow yok. --- */
+.spot-pin__badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background-color: rgb(var(--warning-rust));
+  border: 1.5px solid rgb(var(--surface-dark));
+  pointer-events: none;
+}
+
+/* --- Seçili pin: düz pirinç sarısı çerçeve, glow/blur/pulse yok --- */
+.spot-pin--selected {
+  outline: 2px solid rgb(var(--accent-brass));
+  outline-offset: 2px;
+}
+
+/* --- "Aracıma Uygun" filtresi / uyumluluk `caution`: dikkatli giriş
+   noktalarını renkten BAĞIMSIZ olarak da ayırt eden sol-alt köşe rozeti -
+   üstteki uyarı rozetiyle (sağ-üst) karışmasın diye karşı köşede, farklı
+   şekilde (üçgen). Glow/gölge yok. --- */
+.spot-pin--caution::after {
+  content: "";
+  position: absolute;
+  bottom: -3px;
+  left: -3px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 8px solid rgb(var(--accent-brass));
+  border-top: none;
+  transform: rotate(180deg);
+  pointer-events: none;
+}
+
+/* --- Konum seçim modunda haritaya bırakılan geçici pin: dolu pirinç sarısı,
+   tıklanamaz (sadece görsel işaretçi) --- */
+.spot-pin--pending {
+  background-color: rgb(var(--accent-brass));
+  border-color: rgb(var(--accent-brass));
+  cursor: default;
+  box-shadow: 0 0 0 4px rgb(var(--accent-brass) / 0.25);
+}
+
+/* --- Küme baloncuğu: DOM marker (bkz. MapView kümeleme). Sayı tabular -
+   hizalı rakam; çam zemin, okra kenarlık. --- */
+.spot-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background-color: rgb(var(--surface-dark-raised) / 0.96);
+  border: 1.5px solid rgb(var(--accent-brass) / 0.55);
+  color: rgb(var(--text-on-dark));
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.spot-cluster:hover {
+  filter: brightness(1.15);
+}
+.spot-cluster:focus-visible {
+  outline: 2px solid rgb(var(--accent-brass));
+  outline-offset: 2px;
+}
+
+/* --- MapLibre varsayılan kontrollerini (zoom +/-) temaya uydur --- */
+.maplibregl-ctrl-attrib {
+  background-color: rgb(var(--surface-raised) / 0.85) !important;
+  color: rgb(var(--text-secondary)) !important;
+  font-size: 10px !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: rgb(var(--accent-green)) !important;
+}
+.maplibregl-ctrl-group {
+  background-color: rgb(var(--surface-raised) / 0.97) !important;
+  border: 1px solid rgb(var(--border-light)) !important;
+  box-shadow: 0 2px 10px rgba(21, 33, 27, 0.18) !important;
+  border-radius: 999px !important;
+  overflow: hidden;
+}
+.maplibregl-ctrl-group button {
+  background-color: transparent !important;
+  width: 34px !important;
+  height: 34px !important;
+}
+.maplibregl-ctrl-group button:not(:first-child) {
+  border-top: 1px solid rgb(var(--border-light)) !important;
+}
+.maplibregl-ctrl-group button:hover {
+  background-color: rgb(var(--surface-secondary)) !important;
+}
+
+/* Basit fade-in/slide - modal ve drawer açılışları için tek yerde (abartısız). */
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sheet-rise-in {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.animate-overlay-fade-in {
+  animation: overlay-fade-in 160ms ease-out;
+}
+.animate-sheet-rise-in {
+  animation: sheet-rise-in 200ms ease-out;
+}
+
+/* ==========================================================================
+   Keşif hero'su (bkz. components/ExploreHero.tsx)
+
+   Tüm sahne TEK bir `--p` (0→1) scroll ilerlemesinden türetilir; JS her
+   karede yalnızca bu değişkeni yazar, geri kalan her şey CSS `calc`/`clamp`.
+   Aşamalar:
+     0.00-0.18  başlık sabit, sırtlar yavaş paralaks
+     0.18-0.58  başlık yukarı süzülür; üç saha sorusu sırayla belirir
+     0.64-1.00  vizör açılır - sahnenin ortasında büyüyen maske deliğinden
+                arkadaki gerçek harita görünür; 1'de hero kalkar.
+   ========================================================================== */
+.hero-stage {
+  --p: 0;
+  --title-out: clamp(0, (var(--p) - 0.18) / 0.2, 1);
+  --q1: clamp(0, (var(--p) - 0.36) / 0.08, 1);
+  --q2: clamp(0, (var(--p) - 0.43) / 0.08, 1);
+  --q3: clamp(0, (var(--p) - 0.5) / 0.08, 1);
+  --open: clamp(0, (var(--p) - 0.64) / 0.36, 1);
+  --hole: calc(var(--open) * var(--open) * 150vmax + var(--open) * 4rem);
+  /* Yumuşak kenar deliğin İÇİNDE: --hole=0'ken maske tamamen opak kalır. */
+  -webkit-mask-image: radial-gradient(
+    circle at 50% 58%,
+    transparent calc(var(--hole) - 4rem),
+    #000 var(--hole)
+  );
+  mask-image: radial-gradient(circle at 50% 58%, transparent calc(var(--hole) - 4rem), #000 var(--hole));
+}
+
+.hero-layer {
+  will-change: transform;
+  transform: translate3d(0, calc(var(--p) * var(--depth, 0) * 1px), 0);
+}
+
+.hero-title {
+  opacity: calc(1 - var(--title-out));
+  transform: translate3d(0, calc(var(--title-out) * -8vh), 0);
+}
+
+.hero-questions {
+  opacity: calc(1 - var(--open) * 2.5);
+}
+.hero-question {
+  opacity: var(--q);
+  transform: translate3d(0, calc((1 - var(--q)) * 1.5rem), 0);
+}
+
+.hero-cue {
+  opacity: calc(1 - var(--p) * 8);
+}
+
+.hero-ridges {
+  opacity: calc(1 - var(--open) * 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-layer,
+  .hero-title,
+  .hero-question {
+    transform: none;
+  }
+}

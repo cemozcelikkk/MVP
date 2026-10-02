@@ -1,0 +1,6 @@
+# Local validation only: public production ports are replaced with loopback HTTP.
+services:
+  web:
+    environment:
+      SITE_ADDRESS: ":80"
+    ports: !override ["127.0.0.1:5180:80"]
