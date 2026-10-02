@@ -32,8 +32,18 @@ import {
   Map as MapLibreMap,
   Marker,
   NavigationControl,
+  setWorkerUrl,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// MapLibre 6 worker'ını kendi JS dosyasının yanında (`./maplibre-gl-worker.mjs`)
+// arar; Vite production build'i bu dosyayı dist'e kopyalamadığı için canlıda
+// worker 404 alıyor ve tile'lar hiç işlenmiyor (harita boş/gri kalıyor - dev
+// sunucusunda node_modules'tan servis edildiği için sorun görünmüyor).
+// `?worker&url` worker'ı bağımlılıklarıyla (maplibre-gl-shared) birlikte ayrı
+// bir chunk olarak derletir; URL'sini MapLibre'ye açıkça veriyoruz.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
+
+setWorkerUrl(maplibreWorkerUrl);
 import { AlertTriangle, ChevronDown, Loader2, MapPinned, Navigation, Plus, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchSpotsInBbox, type SpotFeature } from "../lib/api";
