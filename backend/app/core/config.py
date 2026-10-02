@@ -53,7 +53,16 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5174",
         "http://localhost:4173",
         "http://localhost:3000",
+        "https://mvp-k88h7hbns-cemozcelik295-9714s-projects.vercel.app",
     ]
+    # Vercel her deploy'a yeni bir URL verir (mvp-<hash>-<takım>.vercel.app,
+    # mvp-git-<branch>-<takım>.vercel.app); listeye tek tek eklemek yerine bu
+    # projenin önizleme adreslerini regex'le kabul ediyoruz. Takım soneki
+    # sadece bu Vercel hesabına verildiği için başkası bu kalıba uyan bir
+    # adres alamaz. Boş string verilirse regex devre dışı kalır.
+    CORS_ORIGIN_REGEX: str | None = (
+        r"https://mvp-[a-z0-9-]+-cemozcelik295-9714s-projects\.vercel\.app"
+    )
 
     ROUTING_URL: str = "https://router.project-osrm.org/route/v1/driving"
     GEOCODER_URL: str = "https://nominatim.openstreetmap.org/search"
