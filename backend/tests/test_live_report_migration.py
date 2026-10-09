@@ -53,7 +53,7 @@ async def test_legacy_police_and_crowd_rows_survive_the_migration_unchanged():
             await conn.execute(
                 text(
                     "INSERT INTO spots (id,title,category,coordinates,is_verified,review_count) "
-                    "VALUES (:s,'mig test','wild_camping',ST_SetSRID(ST_MakePoint(33,39),4326),false,0)"
+                    "VALUES (:s,'mig test','CAMPING',ST_SetSRID(ST_MakePoint(33,39),4326),false,0)"
                 ),
                 {"s": spot_id},
             )

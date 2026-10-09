@@ -31,3 +31,7 @@ from app.api.v1.endpoints import content_reports
 
 api_router.include_router(content_reports.router)
 
+from app.api.v1.endpoints import basemap_pois
+
+api_router.include_router(basemap_pois.router)
+

@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models.dynamic_status import ACTIVE_REPORT_CONDITION, DynamicStatus  # noqa: F401
-from app.models.enums import ClearanceRequired, SpotCategory, UserRole
+from app.models.enums import ClearanceRequired, SpotCategory, SpotSource, UserRole
 from app.models.spot import Spot
 from app.models.spot_amenities import SpotAmenities
 from app.models.spot_passability import SpotPassability
@@ -252,6 +252,9 @@ async def create_spot(
         entry_longitude=data.entry_longitude,
         approach_description=data.approach_description,
         access_season=data.access_season,
+        extra_amenities=dict(data.extra_amenities),
+        # Bu uç kullanıcı formundan gelir; OSM/Google kaynakları import betiklerinde atanır.
+        source=SpotSource.USER_ADDED,
         coordinates=lonlat_to_wkb(data.coordinates.longitude, data.coordinates.latitude),
         created_by=created_by,
         is_verified=is_verified,
@@ -368,8 +371,15 @@ async def update_spot(
         spot.category = data.category
     if "altitude" in data.model_fields_set:
         spot.altitude = data.altitude
+    if "extra_amenities" in data.model_fields_set:
+        # Tam değiştirme (merge değil); açık `null` -> boş harita.
+        spot.extra_amenities = dict(data.extra_amenities or {})
 
     if data.passability is not None:
+        # Toplu içe aktarılan (OSM/Google) spot'larda passability kaydı yoktur;
+        # ilk düzenlemede oluşturulur (amenities ile aynı desen).
+        if spot.passability is None:
+            spot.passability = SpotPassability(road_type=data.passability.road_type)
         spot.passability.road_type = data.passability.road_type
         spot.passability.max_vehicle_length = data.passability.max_vehicle_length
         spot.passability.max_vehicle_width = data.passability.max_vehicle_width

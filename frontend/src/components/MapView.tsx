@@ -7,8 +7,8 @@ import { useTripStore } from "../store/useTripStore";
  * mekanizmayla (harita boyutu değiştiren her olayı ayrı ayrı dinlemeye gerek
  * kalmadan) doğru şekilde ele alır.
  *
- * Her `moveend` (pan/zoom bitişi) olayında görünür sınırları (bounding box)
- * backend'in `/spots/bbox` endpoint'ine gönderir; sonucu hem harita
+ * Her `moveend` (pan/zoom bitişi) olayında görünür sınırları (`getBounds()`)
+ * ve kategori şeridinin seçimini backend'in `GET /spots` endpoint'ine gönderir; sonucu hem harita
  * pinlerinde HEM `useMapDataStore` üzerinden Keşif listesinde kullanır (AYRI
  * bir liste API çağrısı YOK).
  *
@@ -46,7 +46,7 @@ import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 setWorkerUrl(maplibreWorkerUrl);
 import { AlertTriangle, ChevronDown, Loader2, MapPinned, Navigation, Plus, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSpotsInBbox, type SpotFeature } from "../lib/api";
+import { fetchSpotsInViewport, type SpotFeature } from "../lib/api";
 import { applyCategoryPinVars, hasActiveWarning, pinInnerHtml } from "../lib/pinStyle";
 import { useAuthStore } from "../store/useAuthStore";
 import { useCreateSpotStore } from "../store/useCreateSpotStore";
@@ -54,14 +54,16 @@ import { useFavoritesStore } from "../store/useFavoritesStore";
 import { useMapDataStore } from "../store/useMapDataStore";
 import { filtersToQueryParams, useFilterStore } from "../store/filters";
 import { useVehicleProfileStore } from "../store/useVehicleProfileStore";
-import { applyMapLegibility } from "../lib/mapStyle";
+import { addBasemapPois, attachBasemapPoiLoader } from "../lib/mapPoi";
+import { applyOutdoorStyle, OUTDOOR_COLORS } from "../lib/mapStyle";
+import CategoryPills from "./CategoryPills";
 
-// Ücretsiz, API anahtarı gerektirmeyen CARTO Voyager stili - açık, canlı,
-// yeşil/doğal alanları ve yol hiyerarşisini net gösteren bir taban harita
-// (navigasyon uygulamalarına yakın his). `applyMapLegibility` bunun
-// üzerine ölçülü katman düzenlemeleri uygular (bkz. lib/mapStyle.ts) -
+// Ücretsiz, API anahtarı gerektirmeyen, OpenStreetMap tabanlı CARTO Positron
+// vektör tile'ları. Positron'un kendisi monokrom; `applyOutdoorStyle` bunu
+// sıcak bej zemin, sınıf bazlı arazi örtüsü, canlı su, sarı/turuncu yollar
+// ve hafif hillshade ile outdoor görünüme çevirir (bkz. lib/mapStyle.ts) -
 // ücretli/API anahtarlı yeni bir servise BAĞIMLILIK yok.
-const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json";
+const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
 const SPOTS_SOURCE_ID = "spots";
 const CLUSTER_ENGINE_LAYER_ID = "spots-cluster-engine"; // görünmez - sadece tiling/kümeleme tetikler
@@ -142,6 +144,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
   const onlyVerified = useFilterStore((s) => s.onlyVerified);
   const onlyFavorites = useFilterStore((s) => s.onlyFavorites);
   const vehicleCompatibleOnly = useFilterStore((s) => s.vehicleCompatibleOnly);
+  const selectedCategories = useFilterStore((s) => s.selectedCategories);
   const favoriteIds = useFavoritesStore((s) => s.favoriteIds);
   const fetchFavorites = useFavoritesStore((s) => s.fetchFavorites);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -215,7 +218,11 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     if (!map || !map.getLayer(CLUSTER_ENGINE_LAYER_ID) || !map.isSourceLoaded(SPOTS_SOURCE_ID)) return null;
     const rendered = map.querySourceFeatures(SPOTS_SOURCE_ID);
     const items: RenderedItem[] = [];
+    // Aynı küme/nokta komşu tile'ların tampon bölgesinde birden fazla kez
+    // dönebilir; tekrarlar elenmezse aynı id için ikinci bir Marker kurulur ve
+    // ilki referanssız kalıp haritada asılı kalır (filtre değişse de silinmez).
     const seenClusters = new Set<number>();
+    const seenPoints = new Set<string>();
     for (const f of rendered) {
       if (f.geometry.type !== "Point") continue;
       const [lng, lat] = f.geometry.coordinates as [number, number];
@@ -226,6 +233,8 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
         items.push({ kind: "cluster", id: `cluster-${clusterId}`, clusterId, lng, lat, count: f.properties.point_count as number });
       } else {
         const id = f.properties?.id as string;
+        if (seenPoints.has(id)) continue;
+        seenPoints.add(id);
         const original = featuresByIdRef.current.get(id);
         if (!original) continue;
         items.push({ kind: "point", id: `spot-${id}`, lng, lat, feature: original });
@@ -246,6 +255,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
 
     const next = new Map<string, Marker>();
     for (const item of items) {
+      if (next.has(item.id)) continue;
       const existing = markersRef.current.get(item.id);
       if (existing) {
         markersRef.current.delete(item.id);
@@ -278,14 +288,15 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
       // Uyumluluk özeti: filtre kapalıyken de (yalnızca göstermek için,
       // ELEMEDEN) istenir - liste satırları ve pinlerdeki "dikkatli giriş"
       // rozeti bu sayede filtre açılmadan da görünebilir. Backend hiçbir
-      // spot'u bu bayrak yüzünden elemez (bkz. spots.py::read_spots_in_bbox).
+      // spot'u bu bayrak yüzünden elemez (bkz. spots.py::list_spots_in_viewport).
       const withCompatibility = vehicleCompatibleOnly || (isAuthenticated && hasActiveVehicle);
-      const collection = await fetchSpotsInBbox(
+      const collection = await fetchSpotsInViewport(
         {
-          min_lon: bounds.getWest(),
+          min_lng: bounds.getWest(),
           min_lat: bounds.getSouth(),
-          max_lon: bounds.getEast(),
+          max_lng: bounds.getEast(),
           max_lat: bounds.getNorth(),
+          ...(selectedCategories.length > 0 ? { category: selectedCategories } : {}),
           ...filtersToQueryParams({
             hasToilet,
             hasTrashBins,
@@ -303,7 +314,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
         },
         controller.signal,
       );
-      // "Sadece Favorilerim": backend'in `/bbox`'ı favori filtresi desteklemiyor,
+      // "Sadece Favorilerim": backend'in `/spots`u favori filtresi desteklemiyor,
       // bu yüzden istemci tarafında eleniyor (bkz. spec'teki "opsiyonel" not).
       let features = onlyFavorites
         ? collection.features.filter((f) => favoriteIds.has(f.properties.id))
@@ -353,6 +364,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     onlyVerified,
     onlyFavorites,
     vehicleCompatibleOnly,
+    selectedCategories,
     favoriteIds,
     isAuthenticated,
     hasActiveVehicle,
@@ -382,7 +394,8 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     mapRef.current = map;
 
     map.on("style.load", () => {
-      applyMapLegibility(map);
+      applyOutdoorStyle(map);
+      addBasemapPois(map);
       map.addSource(SPOTS_SOURCE_ID, {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -404,6 +417,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     });
     map.on("moveend", loadSpotsForCurrentView);
     map.on("render", reconcileMarkers);
+    const detachBasemapPois = attachBasemapPoiLoader(map);
 
     // Pinlerin dışında (boş) bir noktaya tıklanınca: konum seçim modundaysak
     // o noktayı seç, değilsek paneli kapat. Marker'lar kendi click
@@ -437,6 +451,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
 
     return () => {
       resizeObserver.disconnect();
+      detachBasemapPois();
       map.remove();
       mapRef.current = null;
     };
@@ -606,8 +621,13 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
 
   return (
     <div className="relative h-full flex-1">
-      <div ref={containerRef} className="h-full w-full" />
+      {/* Stil yüklenene kadar beyaz flaş yerine harita zemin rengi. */}
+      <div ref={containerRef} className="h-full w-full" style={{ backgroundColor: OUTDOOR_COLORS.background }} />
 
+      {/* Sağdaki zoom kontrolüne (NavigationControl) taşmasın diye sağda boşluk bırakılır. */}
+      <div className="pointer-events-none absolute left-0 right-12 top-2 z-10 sm:top-3">
+        <CategoryPills />
+      </div>
       <MapFloatingControls />
       <MapStatusBadge />
       {errorMessage ? <MapErrorToast message={errorMessage} onRetry={() => useMapDataStore.getState().retry()} /> : null}
@@ -640,7 +660,7 @@ function MapFloatingControls() {
 
   if (isPickingLocation) {
     return (
-      <div className="pointer-events-none absolute left-3 right-3 top-3 z-10 flex justify-center sm:left-4 sm:right-auto sm:justify-start">
+      <div className="pointer-events-none absolute left-3 right-3 top-[60px] z-10 flex justify-center sm:left-4 sm:right-auto sm:justify-start">
         <div className="map-float-surface pointer-events-auto flex items-center gap-3 rounded-full py-2 pl-4 pr-2 text-sm font-medium text-text-primary">
           Konum seçmek için haritaya tıklayın
           <button
@@ -656,7 +676,7 @@ function MapFloatingControls() {
   }
 
   return (
-    <div className="pointer-events-none absolute left-3 top-3 z-10 sm:left-4 sm:top-4" ref={dropdownRef}>
+    <div className="pointer-events-none absolute left-3 top-[60px] z-10 sm:left-4" ref={dropdownRef}>
       <button
         type="button"
         onClick={() => setShowDropdown((prev) => !prev)}
@@ -729,7 +749,7 @@ function MapStatusBadge() {
 /** Bağlantı hatası - eski "sol altta küçük mono kutu" yerine, tekrar dene eylemi olan kısa bir toast. */
 function MapErrorToast({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-center sm:top-4">
+    <div className="pointer-events-none absolute inset-x-3 top-[60px] z-20 flex justify-center">
       <div className="map-float-surface pointer-events-auto flex items-center gap-3 rounded-md px-3.5 py-2.5 text-sm text-text-primary">
         <AlertTriangle size={16} className="shrink-0 text-warning-rust" />
         <span>{message}</span>

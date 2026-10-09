@@ -27,7 +27,7 @@ async def test_create_update_and_read(api_client, make_user, db_session):
     amenities = dict(has_toilet=True, has_trash_bins=True, is_free=False,
                      price_description="Gecelik 400 TL", camping_behavior_allowed=False)
     response = await api_client.post(url, headers=headers, json={
-        "title": "Amenities API test", "category": "campsite",
+        "title": "Amenities API test", "category": "CAMPING",
         "coordinates": {"latitude": 39, "longitude": 33},
         "passability": {"road_type": "asphalt"}, "amenities": amenities,
     })

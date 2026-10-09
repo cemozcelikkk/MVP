@@ -60,11 +60,15 @@ apiClient.interceptors.request.use((config) => {
 // --- Domain enum'ları (bkz. backend app/models/enums.py) ---
 
 export type SpotCategory =
-  | "wild_camping"
-  | "campsite"
-  | "sanistation_only"
-  | "day_parking"
-  | "farm_stay";
+  | "CAMPING"
+  | "FISH_RESTAURANT"
+  | "MEAT_RESTAURANT"
+  | "HOTEL_POOL"
+  | "HOSPITAL"
+  | "HEALTH_CENTER";
+
+/** Spot verisinin kaynağı - kullanıcı formu veya OSM/Google toplu içe aktarımı. */
+export type SpotSource = "USER_ADDED" | "OVERPASS_OSM" | "GOOGLE_PLACES";
 
 export type RoadType = "asphalt" | "gravel" | "dirt" | "rocky";
 export type ClearanceRequired = "low" | "standard" | "high_4x4";
@@ -155,6 +159,9 @@ export interface SpotProperties extends SpotTravelInfo {
   description: string | null;
   category: SpotCategory;
   altitude: number | null;
+  source?: SpotSource;
+  /** Serbest ek özellikler, örn. `{ water: true, nearby_hospital_km: 2.5 }`. */
+  extra_amenities?: Record<string, string | number | boolean | null>;
   is_verified: boolean;
   // Sahiplik kontrolü (düzenle/sil butonlarının görünürlüğü) için - auth
   // eklenmeden önce oluşturulmuş seed verisinde null olabilir.
@@ -169,7 +176,7 @@ export interface SpotProperties extends SpotTravelInfo {
   average_rating: number | null;
   review_count: number;
   photos: SpotPhoto[];
-  // Sadece `fetchSpotsInBbox({ withCompatibility: true })` ile ve kullanıcının
+  // Sadece `fetchSpotsInViewport({ with_compatibility: true })` ile ve kullanıcının
   // aktif bir araç profili varsa dolu gelir - aksi halde `undefined`. Tam
   // gerekçe listesi TAŞIMAZ (bkz. backend `SpotCompatibilitySummary`
   // docstring'i) - detay için `fetchSpotCompatibility` kullanılır.
@@ -197,12 +204,12 @@ export interface SpotFeatureCollection {
   features: SpotFeature[];
 }
 
-// --- /spots/bbox sorgu parametreleri (bkz. backend spot_service.get_spots_in_bbox) ---
+// --- GET /spots (harita viewport) sorgu parametreleri (bkz. backend spots.py::list_spots_in_viewport) ---
 
-export interface BboxQueryParams {
-  min_lon: number;
+export interface ViewportQueryParams {
+  min_lng: number;
   min_lat: number;
-  max_lon: number;
+  max_lng: number;
   max_lat: number;
   category?: SpotCategory[];
   only_verified?: boolean;
@@ -225,15 +232,41 @@ export interface BboxQueryParams {
   with_compatibility?: boolean;
 }
 
-export async function fetchSpotsInBbox(
-  params: BboxQueryParams,
+export async function fetchSpotsInViewport(
+  params: ViewportQueryParams,
   signal?: AbortSignal,
 ): Promise<SpotFeatureCollection> {
-  const { data } = await apiClient.get<SpotFeatureCollection>("/spots/bbox", {
+  const { data } = await apiClient.get<SpotFeatureCollection>("/spots", {
     params,
     signal,
     // axios varsayılan olarak diziyi "category[]=x" biçiminde serileştirir;
     // FastAPI/Starlette ise tekrarlanan düz parametre bekliyor ("category=x&category=y").
+    paramsSerializer: { indexes: null },
+  });
+  return data;
+}
+
+// --- GET /basemap-pois (bkz. backend app/api/v1/endpoints/basemap_pois.py) ---
+
+/** Düşük zoom (11-13) harita altlığı için önemli OSM noktaları - KaravanTR kaydı DEĞİL. */
+export type BasemapPoiCategory = "hospital" | "fuel" | "police" | "clinic" | "pharmacy";
+
+export interface BasemapPoiCollection {
+  type: "FeatureCollection";
+  features: {
+    type: "Feature";
+    geometry: { type: "Point"; coordinates: [number, number] };
+    properties: { osm_id: string; category: BasemapPoiCategory; name: string | null };
+  }[];
+}
+
+export async function fetchBasemapPois(
+  params: { min_lng: number; min_lat: number; max_lng: number; max_lat: number; category: BasemapPoiCategory[] },
+  signal?: AbortSignal,
+): Promise<BasemapPoiCollection> {
+  const { data } = await apiClient.get<BasemapPoiCollection>("/basemap-pois", {
+    params,
+    signal,
     paramsSerializer: { indexes: null },
   });
   return data;

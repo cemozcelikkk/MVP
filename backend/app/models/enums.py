@@ -8,11 +8,25 @@ import enum
 
 
 class SpotCategory(str, enum.Enum):
-    WILD_CAMPING = "wild_camping"          # Doğa/arazi kampı, resmi olmayan alan
-    CAMPSITE = "campsite"                  # Ücretli/ücretsiz düzenlenmiş kamp alanı
-    SANISTATION_ONLY = "sanistation_only"  # Sadece gri/siyah su boşaltma istasyonu
-    DAY_PARKING = "day_parking"            # Sadece gündüz kullanımına uygun otopark
-    FARM_STAY = "farm_stay"                # Çiftlik/bağ-bahçe konaklaması (HarvestHost tipi)
+    """Harita pin kategorisi (park4night tarzı çok-tipli POI haritası).
+
+    Değerler API'de ve DB enum'unda BÜYÜK harfle taşınır; istemciler bu
+    kodlara göre dallanmalı/ikon seçmelidir.
+    """
+    CAMPING = "CAMPING"                  # Kamp/karavan konaklama noktası (resmi alan veya doğa)
+    FISH_RESTAURANT = "FISH_RESTAURANT"  # Balık restoranı
+    MEAT_RESTAURANT = "MEAT_RESTAURANT"  # Et restoranı / mangal / kebap
+    HOTEL_POOL = "HOTEL_POOL"            # Havuzu dışarıdan kullanılabilen otel
+    HOSPITAL = "HOSPITAL"                # Hastane (acil servis)
+    HEALTH_CENTER = "HEALTH_CENTER"      # Sağlık ocağı / aile sağlığı merkezi
+
+
+class SpotSource(str, enum.Enum):
+    """Spot verisinin nereden geldiği. Kullanıcı formundan gelenler her zaman
+    USER_ADDED'dir; diğerleri toplu içe aktarma (import) betiklerince atanır."""
+    USER_ADDED = "USER_ADDED"
+    OVERPASS_OSM = "OVERPASS_OSM"
+    GOOGLE_PLACES = "GOOGLE_PLACES"
 
 
 class RoadType(str, enum.Enum):

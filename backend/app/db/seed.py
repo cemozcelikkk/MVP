@@ -48,7 +48,7 @@ SEED_ENTRIES: list[dict] = [
                 "Akdeniz'e sıfır, çakıllı bir koyda gölgesiz vahşi kamp alanı. "
                 "Tekne turlarının kalktığı iskeleye yürüme mesafesinde."
             ),
-            category=SpotCategory.WILD_CAMPING,
+            category=SpotCategory.CAMPING,
             altitude=15,
             coordinates=Coordinates(latitude=36.1964, longitude=29.6382),
             passability=SpotPassabilityCreate(
@@ -79,7 +79,7 @@ SEED_ENTRIES: list[dict] = [
                 "Sedir Dağı eteklerinde, zeytinlik içinde tam donanımlı çiftlik "
                 "konaklaması. Ev yapımı süt ürünleri satın alınabilir."
             ),
-            category=SpotCategory.FARM_STAY,
+            category=SpotCategory.CAMPING,
             altitude=5,
             coordinates=Coordinates(latitude=37.0533, longitude=28.3269),
             passability=SpotPassabilityCreate(
@@ -114,7 +114,7 @@ SEED_ENTRIES: list[dict] = [
                 "Peri bacalarına ve balon manzarasına hakim, arazi aracı gerektiren "
                 "yüksek rakımlı vahşi kamp alanı. Sabah balon kalkışları buradan izlenir."
             ),
-            category=SpotCategory.WILD_CAMPING,
+            category=SpotCategory.CAMPING,
             altitude=1300,
             coordinates=Coordinates(latitude=38.6431, longitude=34.8306),
             passability=SpotPassabilityCreate(
@@ -142,7 +142,7 @@ SEED_ENTRIES: list[dict] = [
         "spot": SpotCreate(
             title="Datça Yarımadası Sanistasyon Noktası",
             description="Belediyeye ait, sadece gri/siyah su boşaltımı için düzenlenmiş istasyon.",
-            category=SpotCategory.SANISTATION_ONLY,
+            category=SpotCategory.CAMPING,
             altitude=20,
             coordinates=Coordinates(latitude=36.7028, longitude=27.6889),
             passability=SpotPassabilityCreate(

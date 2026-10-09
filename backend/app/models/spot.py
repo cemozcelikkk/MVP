@@ -22,14 +22,16 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.base import TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import SpotCategory
+from app.models.enums import SpotCategory, SpotSource
+from app.utils.geo import wkb_to_lonlat
 
 if TYPE_CHECKING:
     from app.models.check_in import CheckIn
@@ -63,6 +65,27 @@ class Spot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     coordinates: Mapped[str] = mapped_column(
         Geometry(geometry_type="POINT", srid=4326, spatial_index=True),
         nullable=False,
+    )
+
+    # Verinin kaynağı: kullanıcı formu mu, yoksa OSM/Google toplu içe aktarımı mı.
+    source: Mapped[SpotSource] = mapped_column(
+        SAEnum(
+            SpotSource,
+            name="spot_source",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        default=SpotSource.USER_ADDED,
+        server_default=SpotSource.USER_ADDED.value,
+        nullable=False,
+        index=True,
+    )
+
+    # Serbest formatlı ek özellikler (OSM/Google etiketleri, "nearby_hospital_km" vb.).
+    # Örn: {"water": true, "electricity": true, "nearby_hospital_km": 2.5}
+    # Yapılandırılmış, filtrelenebilir altyapı alanları `spot_amenities` tablosunda
+    # (`amenities` ilişkisi) kalır; bu sütun onların yerine geçmez.
+    extra_amenities: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
     )
 
     altitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -145,7 +168,27 @@ class Spot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_spots_category_verified", "category", "is_verified"),
         # /spots/sync delta sorgusunun hot path'i: "updated_at > since".
         Index("ix_spots_updated_at", "updated_at"),
+        # OSM içe aktarımının tekrar çalıştırılabilmesi için: aynı OSM nesnesi
+        # (`extra_amenities.osm_id`, örn. "node/123") en fazla bir kez eklenir
+        # (bkz. scripts/fetch_osm_places.py - INSERT ... ON CONFLICT DO NOTHING).
+        Index(
+            "uq_spots_osm_id",
+            text("(extra_amenities ->> 'osm_id')"),
+            unique=True,
+            postgresql_where=text("source = 'OVERPASS_OSM'"),
+        ),
     )
+
+    # Konumun tek doğruluk kaynağı `coordinates` (PostGIS) sütunudur; ayrı
+    # float sütunlar tutulmaz (ikisi zamanla birbirinden kayabilir). Bu
+    # property'ler ORM tarafında düz float erişimi sağlar.
+    @property
+    def latitude(self) -> float:
+        return float(wkb_to_lonlat(self.coordinates)[1])
+
+    @property
+    def longitude(self) -> float:
+        return float(wkb_to_lonlat(self.coordinates)[0])
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Spot id={self.id} title={self.title!r} category={self.category}>"

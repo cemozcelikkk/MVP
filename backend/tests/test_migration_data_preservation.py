@@ -45,7 +45,7 @@ async def test_duplicate_review_migration_keeps_every_row_and_recomputes_only_ac
             await conn.execute(
                 text(
                     "INSERT INTO spots (id,title,category,coordinates,is_verified,review_count) "
-                    "VALUES (:s,'mig test','wild_camping',ST_SetSRID(ST_MakePoint(33,39),4326),false,3)"
+                    "VALUES (:s,'mig test','CAMPING',ST_SetSRID(ST_MakePoint(33,39),4326),false,3)"
                 ),
                 {"s": spot_id},
             )

@@ -52,6 +52,96 @@ from app.services.vehicle_profile_service import (
 router = APIRouter(prefix="/spots", tags=["spots"])
 
 
+def _parse_categories(raw: list[str] | None) -> list[SpotCategory] | None:
+    """`?category=CAMPING,HOSPITAL` ve `?category=CAMPING&category=HOSPITAL` biçimlerinin
+    ikisini de (ve karışımını) kabul eder; büyük/küçük harf duyarsızdır."""
+    if not raw:
+        return None
+    names = [part.strip().upper() for item in raw for part in item.split(",") if part.strip()]
+    try:
+        return list(dict.fromkeys(SpotCategory(name) for name in names)) or None
+    except ValueError:
+        valid = ", ".join(c.value for c in SpotCategory)
+        raise HTTPException(
+            status_code=422,  # HTTP_422_* sabiti Starlette sürümleri arasında yeniden adlandırıldı
+            detail=f"Geçersiz kategori. Geçerli değerler: {valid}",
+        )
+
+
+@router.get("", response_model=FeatureCollection[SpotProperties])
+async def list_spots_in_viewport(
+    min_lat: Annotated[float, Query(ge=-90, le=90, description="Ekranın güney sınırı (enlem)")],
+    max_lat: Annotated[float, Query(ge=-90, le=90, description="Ekranın kuzey sınırı (enlem)")],
+    min_lng: Annotated[float, Query(ge=-180, le=180, description="Ekranın batı sınırı (boylam)")],
+    max_lng: Annotated[float, Query(ge=-180, le=180, description="Ekranın doğu sınırı (boylam)")],
+    category: Annotated[
+        list[str] | None,
+        Query(
+            description=(
+                "Kategori filtresi. Virgülle (`category=CAMPING,HOSPITAL`) veya parametre "
+                "tekrarlanarak (`category=CAMPING&category=HOSPITAL`) birden çok kategori seçilebilir."
+            )
+        ),
+    ] = None,
+    only_verified: bool = False,
+    has_fresh_water: bool | None = None,
+    has_black_water: bool | None = None,
+    has_electricity: bool | None = None,
+    has_toilet: bool | None = None,
+    has_trash_bins: bool | None = None,
+    is_free: bool | None = None,
+    camping_behavior_allowed: bool | None = None,
+    overnight_allowed: bool | None = None,
+    max_vehicle_length: Annotated[float | None, Query(gt=0, le=30)] = None,
+    requires_4x4: bool | None = None,
+    caravan_type: Annotated[str | None, Query(max_length=30)] = None,
+    limit: Annotated[
+        int, Query(ge=1, le=settings.SPOTS_BBOX_MAX_LIMIT, description="Azami sonuç sayısı")
+    ] = settings.SPOTS_BBOX_DEFAULT_LIMIT,
+    with_compatibility: bool = False,
+    authorization: Annotated[str | None, Header()] = None,
+    db: AsyncSession = Depends(get_db),
+) -> FeatureCollection[SpotProperties]:
+    """
+    Harita ekranındaki (viewport) spot'ları GeoJSON FeatureCollection olarak döndürür.
+
+    park4night tarzı çok kategorili haritanın ana ucu: bounding box
+    (`min_lat`, `max_lat`, `min_lng`, `max_lng`) ve kategori filtresi alır. Her
+    Feature'ın `properties`'inde `latitude`/`longitude` (float), `category`,
+    `source` ve `extra_amenities` bulunur. Altyapı/araç filtreleri ve
+    `with_compatibility` opsiyoneldir; anlamları `/spots/bbox` ile birebir
+    aynıdır (o uca devredilir, sorgu mantığı tek yerde kalır).
+    """
+    if min_lng >= max_lng or min_lat >= max_lat:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Geçersiz bounding box: min_lng < max_lng ve min_lat < max_lat sağlanmalı.",
+        )
+    return await read_spots_in_bbox(
+        min_lon=min_lng,
+        min_lat=min_lat,
+        max_lon=max_lng,
+        max_lat=max_lat,
+        category=_parse_categories(category),
+        only_verified=only_verified,
+        has_fresh_water=has_fresh_water,
+        has_black_water=has_black_water,
+        has_electricity=has_electricity,
+        has_toilet=has_toilet,
+        has_trash_bins=has_trash_bins,
+        is_free=is_free,
+        camping_behavior_allowed=camping_behavior_allowed,
+        overnight_allowed=overnight_allowed,
+        max_vehicle_length=max_vehicle_length,
+        requires_4x4=requires_4x4,
+        caravan_type=caravan_type,
+        limit=limit,
+        with_compatibility=with_compatibility,
+        authorization=authorization,
+        db=db,
+    )
+
+
 @router.get("/bbox", response_model=FeatureCollection[SpotProperties])
 async def read_spots_in_bbox(
     min_lon: Annotated[float, Query(ge=-180, le=180, description="Dörtgenin batı sınırı (boylam)")],

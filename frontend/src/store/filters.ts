@@ -4,6 +4,7 @@
  * ve API'nin beklediği query param şekline dönüştürmek.
  */
 import { create } from "zustand";
+import type { SpotCategory } from "../lib/api";
 
 export type FilterToggleKey =
   | "hasToilet"
@@ -61,20 +62,46 @@ const INITIAL_VALUES: FilterValues = {
 };
 
 interface FilterState extends FilterValues {
+  /**
+   * Harita üstündeki kategori şeridinin (bkz. `CategoryPills`) seçimi. Boş
+   * dizi = "Tümü" (kategori filtresi yok). Backend'e `category` parametresi
+   * olarak gider; açık/kapalı anahtarlardan ayrı tutulur ve "Tüm Filtreler"
+   * rozetine/`reset`ine dahil değildir (şeridin kendi "Tümü" düğmesi var).
+   */
+  selectedCategories: SpotCategory[];
   toggle: (key: FilterToggleKey) => void;
+  /** Bir kategori grubunu (ör. Sağlık = HOSPITAL + HEALTH_CENTER) seçer/bırakır. */
+  toggleCategoryGroup: (group: readonly SpotCategory[]) => void;
+  /** "Tümü" - kategori filtresini kaldırır. */
+  clearCategories: () => void;
   /** "Filtreleri temizle" - Üst bar / Tüm Filtreler modalındaki ortak eylem. */
   reset: () => void;
 }
 
 export const useFilterStore = create<FilterState>((set) => ({
   ...INITIAL_VALUES,
+  selectedCategories: [],
   toggle: (key) => set((state) => ({ [key]: !state[key] }) as Pick<FilterState, typeof key>),
+  toggleCategoryGroup: (group) =>
+    set((state) => {
+      const isSelected = group.every((c) => state.selectedCategories.includes(c));
+      return {
+        selectedCategories: isSelected
+          ? state.selectedCategories.filter((c) => !group.includes(c))
+          : [...state.selectedCategories, ...group.filter((c) => !state.selectedCategories.includes(c))],
+      };
+    }),
+  clearCategories: () => set({ selectedCategories: [] }),
   reset: () => set(INITIAL_VALUES),
 }));
 
-/** Aktif filtre sayısı - "Tüm Filtreler" butonundaki rozet için (bkz. AppTopBar). */
+/**
+ * Aktif filtre sayısı - "Tüm Filtreler" butonundaki rozet için (bkz. AppTopBar).
+ * Yalnızca açık/kapalı anahtarları sayar; store'un tamamı verilse bile
+ * eylem fonksiyonları ve `selectedCategories` sayılmaz.
+ */
 export function countActiveFilters(state: FilterValues): number {
-  return Object.values(state).filter(Boolean).length;
+  return (Object.keys(INITIAL_VALUES) as (keyof FilterValues)[]).filter((key) => state[key] === true).length;
 }
 
 /**

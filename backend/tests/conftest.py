@@ -96,7 +96,7 @@ async def make_spot(db_session: AsyncSession) -> AsyncGenerator[Callable[..., Co
             db_session,
             data=SpotCreate(
                 title=title,
-                category=SpotCategory.WILD_CAMPING,
+                category=SpotCategory.CAMPING,
                 coordinates=Coordinates(latitude=39.0, longitude=33.0),
                 passability=SpotPassabilityCreate(road_type="asphalt"),
                 amenities=SpotAmenitiesCreate(),

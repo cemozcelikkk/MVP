@@ -23,11 +23,12 @@ import Modal from "./ui/Modal";
 import { Section } from "./ui/Section";
 
 const CATEGORY_OPTIONS: { value: SpotCategory; label: string }[] = [
-  { value: "wild_camping", label: "Vahşi Kamp" },
-  { value: "campsite", label: "Kamping / Karavan Alanı" },
-  { value: "sanistation_only", label: "Hizmet Noktası (Su/Atık)" },
-  { value: "day_parking", label: "Günübirlik Mola" },
-  { value: "farm_stay", label: "Çiftlik Konaklaması" },
+  { value: "CAMPING", label: "Kamp / Karavan Alanı" },
+  { value: "FISH_RESTAURANT", label: "Balık Restoranı" },
+  { value: "MEAT_RESTAURANT", label: "Et Restoranı" },
+  { value: "HOTEL_POOL", label: "Otel / Havuz" },
+  { value: "HOSPITAL", label: "Hastane" },
+  { value: "HEALTH_CENTER", label: "Sağlık Ocağı" },
 ];
 
 const ROAD_TYPE_OPTIONS: { value: RoadType; label: string }[] = [

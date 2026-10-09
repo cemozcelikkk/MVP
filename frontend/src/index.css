@@ -86,6 +86,14 @@ a {
   touch-action: manipulation;
 }
 
+/* Yatay kaydırılabilir şeritler (kategori düğmeleri): kaydırma çalışır, çubuk görünmez. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* --- Harita üzeri yüzen teknik araçlar (zoom, sayaç rozeti, "Nokta Ekle")
    ortak yüzeyi: açık harita zemininin ÜZERİNDE net bir kontrast için hafif
    kum yüzey, 1px kenarlık, kontrollü gölge. Glow/blur yok. --- */
@@ -100,13 +108,17 @@ a {
    göre `--pin-fill`/`--pin-border` custom property'leriyle gelir (bkz.
    lib/pinStyle.ts). Tıklama alanı görünenden büyük (bkz. ::before). --- */
 .spot-pin {
-  width: 30px;
-  height: 30px;
+  /* Taban harita POI'lerinden (20px, yuvarlak, bkz. lib/mapPoi.ts) her zaman
+     daha baskın: daha büyük, köşeli kare ve beyaz halkalı. */
+  width: 34px;
+  height: 34px;
   padding: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background-color: var(--pin-fill, rgb(var(--surface-dark-raised)));
   border: 1px solid var(--pin-border, rgb(var(--border-dark)));
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    0 0 0 2px #fffdf7,
+    0 2px 6px rgba(0, 0, 0, 0.35);
   cursor: pointer;
   position: relative;
   display: flex;
@@ -132,8 +144,8 @@ a {
 
 .spot-pin__icon {
   display: flex;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   pointer-events: none;
 }
 .spot-pin__icon svg {
@@ -160,7 +172,7 @@ a {
 /* --- Seçili pin: düz pirinç sarısı çerçeve, glow/blur/pulse yok --- */
 .spot-pin--selected {
   outline: 2px solid rgb(var(--accent-brass));
-  outline-offset: 2px;
+  outline-offset: 4px;
 }
 
 /* --- "Aracıma Uygun" filtresi / uyumluluk `caution`: dikkatli giriş

@@ -327,7 +327,7 @@ async def test_account_deletion_keeps_shared_spot(api_client, db_session):
         db_session,
         data=SpotCreate(
             title="Delete test spot",
-            category="wild_camping",
+            category="CAMPING",
             coordinates={"latitude": 39, "longitude": 33},
             passability={"road_type": "asphalt"},
             amenities={},

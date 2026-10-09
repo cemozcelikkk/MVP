@@ -11,11 +11,11 @@ dönüşüm yazmak zorunda kalmaz.
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.models.enums import SpotCategory
+from app.models.enums import SpotCategory, SpotSource
 from app.schemas.common import Coordinates
 from app.schemas.compatibility import SpotCompatibilitySummary
 from app.schemas.dynamic_status import DynamicStatusRead
@@ -26,6 +26,20 @@ from app.schemas.spot_amenities import SpotAmenitiesCreate, SpotAmenitiesRead, S
 from app.schemas.spot_passability import SpotPassabilityCreate, SpotPassabilityRead
 from app.schemas.spot_photo import SpotPhotoRead
 from app.utils.geo import wkb_to_lonlat
+
+_EXTRA_AMENITIES_MAX_KEYS = 50
+
+# `spots.extra_amenities` JSONB alanı: düz anahtar -> skaler değer haritası.
+# Örn: {"water": true, "electricity": true, "nearby_hospital_km": 2.5}
+ExtraAmenities = dict[
+    Annotated[str, StringConstraints(min_length=1, max_length=64)],
+    bool | int | float | Annotated[str, StringConstraints(max_length=300)] | None,
+]
+
+
+def _check_extra_amenities_size(value: dict | None) -> None:
+    if value is not None and len(value) > _EXTRA_AMENITIES_MAX_KEYS:
+        raise ValueError(f"extra_amenities en fazla {_EXTRA_AMENITIES_MAX_KEYS} anahtar içerebilir.")
 
 
 class SpotBase(BaseModel):
@@ -44,9 +58,14 @@ class SpotBase(BaseModel):
     entry_longitude: float | None = Field(default=None, ge=-180, le=180)
     approach_description: str | None = Field(default=None, max_length=2000)
     access_season: str | None = Field(default=None, max_length=300)
+    extra_amenities: ExtraAmenities = Field(
+        default_factory=dict,
+        description='Serbest ek özellikler, örn. {"water": true, "nearby_hospital_km": 2.5}',
+    )
 
     @model_validator(mode="after")
     def validate_entry(self):
+        _check_extra_amenities_size(self.extra_amenities)
         if (self.entry_latitude is None) != (self.entry_longitude is None):
             raise ValueError("Giriş enlemi ve boylamı birlikte girilmeli.")
         if self.rule_checked_on and self.rule_checked_on > date.today():
@@ -99,9 +118,11 @@ class SpotUpdate(BaseModel):
     entry_longitude: float | None = Field(default=None, ge=-180, le=180)
     approach_description: str | None = Field(default=None, max_length=2000)
     access_season: str | None = Field(default=None, max_length=300)
+    extra_amenities: ExtraAmenities | None = None
 
     @model_validator(mode="after")
     def validate_entry(self):
+        _check_extra_amenities_size(self.extra_amenities)
         if ("entry_latitude" in self.model_fields_set) != (
             "entry_longitude" in self.model_fields_set
         ):
@@ -132,6 +153,8 @@ def _orm_to_dict_with_lonlat(spot: Any) -> dict:
         "entry_longitude": spot.entry_longitude,
         "approach_description": spot.approach_description,
         "access_season": spot.access_season,
+        "extra_amenities": spot.extra_amenities or {},
+        "source": spot.source,
         "is_verified": spot.is_verified,
         "created_by": spot.created_by,
         "created_at": spot.created_at,
@@ -161,6 +184,7 @@ class SpotRead(SpotBase):
     id: uuid.UUID
     latitude: float
     longitude: float
+    source: SpotSource = SpotSource.USER_ADDED
     is_verified: bool
     # Sahiplik kontrolü (düzenle/sil butonlarının görünürlüğü) için -
     # auth eklenmeden önce oluşturulmuş seed verisinde NULL olabilir.
@@ -186,11 +210,16 @@ class SpotRead(SpotBase):
 
 
 class SpotProperties(SpotBase):
-    """GeoJSON Feature.properties gövdesi (geometry ayrı taşındığı için lat/lon içermez)."""
+    """GeoJSON Feature.properties gövdesi (lat/lon ayrıca `Feature.geometry`'de de taşınır)."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    # Geometry zaten Feature.geometry'de; bunlar istemcinin properties'ten
+    # doğrudan float okuyabilmesi için (ör. "pin detayında koordinatı kopyala").
+    latitude: float
+    longitude: float
+    source: SpotSource = SpotSource.USER_ADDED
     is_verified: bool
     created_by: uuid.UUID | None = None
     created_at: datetime
@@ -226,6 +255,7 @@ class SpotSummary(SpotBase):
     id: uuid.UUID
     latitude: float
     longitude: float
+    source: SpotSource = SpotSource.USER_ADDED
     is_verified: bool
     average_rating: float | None = None
     review_count: int = 0
@@ -252,6 +282,8 @@ class SpotSummary(SpotBase):
             "entry_longitude": data.entry_longitude,
             "approach_description": data.approach_description,
             "access_season": data.access_season,
+            "extra_amenities": data.extra_amenities or {},
+            "source": data.source,
             "is_verified": data.is_verified,
             "average_rating": data.average_rating,
             "review_count": data.review_count,

@@ -336,7 +336,7 @@ function landscapeFor(id: string) {
  * ritmini koruyan, kategoriyi de ayırt ettiren bir görsel.
  */
 function CardLandscape({ id, category }: { id: string; category: SpotFeature["properties"]["category"] }) {
-  const style = CATEGORY_LANDSCAPE_STYLE[category] ?? CATEGORY_LANDSCAPE_STYLE.day_parking;
+  const style = CATEGORY_LANDSCAPE_STYLE[category] ?? CATEGORY_LANDSCAPE_STYLE.CAMPING;
   const { far, near, sunX, sunY } = useMemo(() => landscapeFor(id), [id]);
   return (
     <div

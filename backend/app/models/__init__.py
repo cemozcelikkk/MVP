@@ -5,6 +5,7 @@ Alembic'in `target_metadata = Base.metadata` üzerinden tüm tabloları
 görebilmesi için bu modül `env.py` içinde import edilecektir.
 """
 from app.core.database import Base
+from app.models.basemap_poi import BasemapPoi
 from app.models.check_in import CheckIn
 from app.models.dynamic_status import DynamicStatus
 from app.models.field_verification import SpotFieldVerification
@@ -25,6 +26,7 @@ __all__ = [
     "RequestQuota",
     "PlaceCache",
     "Base",
+    "BasemapPoi",
     "Spot",
     "SpotPassability",
     "SpotAmenities",
