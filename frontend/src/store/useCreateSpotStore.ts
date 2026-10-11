@@ -12,10 +12,20 @@
  * geçirmeden aynı durumu paylaşabiliyor.
  */
 import { create } from "zustand";
-import type { SpotFeature } from "../lib/api";
+import type { ServicePointCategory, ServicePointFeature, SpotFeature } from "../lib/api";
+import type { PlaceGroup } from "./filters";
 import { useAuthStore } from "./useAuthStore";
 
 interface CreateSpotState {
+  /**
+   * "Ne eklemek istiyorsunuz?" tür seçim penceresi (bkz. AddPlaceChooser). Ekleme
+   * akışı her zaman burada başlar: önce tür, sonra konum, en son türe özgü kısa form.
+   */
+  isChooserOpen: boolean;
+  /** Seçilen ana grup - hangi formun açılacağını belirler (kamp detaylı, diğerleri kısa). */
+  addGroup: PlaceGroup | null;
+  /** Hizmet noktalarında seçilen alt tür (ör. HEALTH_CENTER); kampta null. */
+  addCategory: ServicePointCategory | null;
   isPickingLocation: boolean;
   /** [boylam, enlem] - haritada bırakılan geçici (pirinç sarısı) pin. */
   pendingCoordinates: [number, number] | null;
@@ -42,7 +52,15 @@ interface CreateSpotState {
    */
   updatedSpot: SpotFeature | null;
 
-  /** "+ Nokta Ekle" butonu. Oturum yoksa doğrudan giriş modalını açar. */
+  /** "+ Nokta Ekle" / haritada sağ tık. Oturum yoksa giriş modalını açar. Koordinat verilirse konum adımı atlanır. */
+  openChooser: (coordinates?: [number, number]) => void;
+  closeChooser: () => void;
+  /** Tür seçildi: konum zaten varsa forma geçer, yoksa seçim penceresi konum adımına ilerler. */
+  chooseType: (group: PlaceGroup, category: ServicePointCategory | null) => void;
+  /** Hizmet noktası oluşturuldu: harita oraya uçar (bkz. MapView). */
+  focusedServicePoint: ServicePointFeature | null;
+  focusServicePoint: (feature: ServicePointFeature) => void;
+  /** Tür seçildikten sonra "Haritadan Seç". */
   startPicking: () => void;
   cancelPicking: () => void;
   /** Haritaya tıklanınca (picking modundayken) ya da sağ tıklanınca çağrılır. */
@@ -61,7 +79,26 @@ interface CreateSpotState {
   spotUpdated: (feature: SpotFeature) => void;
 }
 
-export const useCreateSpotStore = create<CreateSpotState>((set) => ({
+function requireAuth(): boolean {
+  if (useAuthStore.getState().isAuthenticated) return true;
+  useAuthStore.getState().openAuthModal();
+  return false;
+}
+
+const RESET_FLOW = {
+  isChooserOpen: false,
+  isPickingLocation: false,
+  isModalOpen: false,
+  pendingCoordinates: null,
+  addGroup: null,
+  addCategory: null,
+} as const;
+
+export const useCreateSpotStore = create<CreateSpotState>((set, get) => ({
+  isChooserOpen: false,
+  addGroup: null,
+  addCategory: null,
+  focusedServicePoint: null,
   isPickingLocation: false,
   pendingCoordinates: null,
   isModalOpen: false,
@@ -73,29 +110,39 @@ export const useCreateSpotStore = create<CreateSpotState>((set) => ({
   deletedSpotId: null,
   updatedSpot: null,
 
-  startPicking: () => {
-    if (!useAuthStore.getState().isAuthenticated) {
-      useAuthStore.getState().openAuthModal();
-      return;
-    }
-    set({ isPickingLocation: true, geoError: null });
+  openChooser: (coordinates) => {
+    if (!requireAuth()) return;
+    set({ ...RESET_FLOW, isChooserOpen: true, pendingCoordinates: coordinates ?? null, geoError: null });
   },
 
-  cancelPicking: () => set({ isPickingLocation: false }),
+  closeChooser: () => set({ ...RESET_FLOW }),
+
+  chooseType: (group, category) => {
+    const hasLocation = get().pendingCoordinates !== null;
+    set({ addGroup: group, addCategory: category, isChooserOpen: !hasLocation, isModalOpen: hasLocation });
+  },
+
+  focusServicePoint: (feature) => set({ ...RESET_FLOW, focusedServicePoint: feature }),
+
+  startPicking: () => {
+    if (!requireAuth()) return;
+    set({ isChooserOpen: false, isPickingLocation: true, geoError: null });
+  },
+
+  cancelPicking: () => set({ ...RESET_FLOW }),
 
   locationPicked: (coordinates) => {
-    if (!useAuthStore.getState().isAuthenticated) {
-      useAuthStore.getState().openAuthModal();
+    if (!requireAuth()) return;
+    // Tür henüz seçilmediyse (ör. haritada sağ tık) önce "ne eklemek istiyorsunuz?".
+    if (get().addGroup === null) {
+      set({ ...RESET_FLOW, isChooserOpen: true, pendingCoordinates: coordinates });
       return;
     }
-    set({ pendingCoordinates: coordinates, isPickingLocation: false, isModalOpen: true });
+    set({ pendingCoordinates: coordinates, isPickingLocation: false, isChooserOpen: false, isModalOpen: true });
   },
 
   useCurrentLocation: () => {
-    if (!useAuthStore.getState().isAuthenticated) {
-      useAuthStore.getState().openAuthModal();
-      return;
-    }
+    if (!requireAuth()) return;
     if (!navigator.geolocation) {
       set({ geoError: "Tarayıcınız konum hizmetlerini desteklemiyor." });
       return;
@@ -104,10 +151,12 @@ export const useCreateSpotStore = create<CreateSpotState>((set) => ({
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const coords: [number, number] = [position.coords.longitude, position.coords.latitude];
+        const hasType = get().addGroup !== null;
         set({
           pendingCoordinates: coords,
           isPickingLocation: false,
-          isModalOpen: true,
+          isChooserOpen: !hasType,
+          isModalOpen: hasType,
           isLocating: false,
         });
       },
@@ -126,10 +175,9 @@ export const useCreateSpotStore = create<CreateSpotState>((set) => ({
 
   clearGeoError: () => set({ geoError: null }),
 
-  closeModal: () => set({ isModalOpen: false, pendingCoordinates: null }),
+  closeModal: () => set({ ...RESET_FLOW }),
 
-  focusSpot: (feature) =>
-    set({ isModalOpen: false, pendingCoordinates: null, focusedSpot: feature }),
+  focusSpot: (feature) => set({ ...RESET_FLOW, focusedSpot: feature }),
 
   spotDeleted: (spotId) => set({ deletedSpotId: spotId }),
 

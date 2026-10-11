@@ -8,12 +8,22 @@
  * Kart yalnızca yola çıkmadan önce sorulan üç soruyu yanıtlar: su var mı,
  * elektrik var mı, yol karavanı taşır mı. Ayrıntılar (GSM, ölçüler, canlı
  * durum geçmişi) nokta detayında kalır.
+ *
+ * Kamp kartlarının üstünde "Yakınımdakiler" (bkz. NearbyServices): aynı bölgedeki
+ * ya da seçilen merkeze yakın hizmet noktaları (restoran, sağlık, WC, duş).
  */
 import { Caravan, Droplets, Navigation, Route, ShieldAlert, Star, Zap } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import { resolveMediaUrl, type CompatibilityStatus, type RoadType, type SpotFeature } from "../lib/api";
+import {
+  resolveMediaUrl,
+  type CompatibilityStatus,
+  type RoadType,
+  type ServicePointFeature,
+  type SpotFeature,
+} from "../lib/api";
 import { googleMapsDirectionsUrl } from "../lib/format";
 import { CATEGORY_LABEL, CATEGORY_LANDSCAPE_STYLE, categoryIconSvg } from "../lib/pinStyle";
+import NearbyServices from "./NearbyServices";
 import { countActiveFilters, useFilterStore, type FilterValues } from "../store/filters";
 import { useMapDataStore } from "../store/useMapDataStore";
 
@@ -59,14 +69,17 @@ function sortFeatures(features: SpotFeature[], sort: SortKey): SpotFeature[] {
 
 interface Props {
   onSelect: (feature: SpotFeature) => void;
+  onSelectServicePoint?: (feature: ServicePointFeature) => void;
 }
 
-export default function ExploreList({ onSelect }: Props) {
+export default function ExploreList({ onSelect, onSelectServicePoint }: Props) {
   const features = useMapDataStore((s) => s.features);
+  const servicePoints = useMapDataStore((s) => s.servicePoints);
   const isLoading = useMapDataStore((s) => s.isLoading);
   const errorMessage = useMapDataStore((s) => s.errorMessage);
   const retry = useMapDataStore((s) => s.retry);
   const filters = useFilterStore();
+  const campsHidden = filters.selectedGroups.length > 0 && !filters.selectedGroups.includes("camping");
   const [sort, setSort] = useState<SortKey>("default");
 
   const activeCount = countActiveFilters(filters as unknown as FilterValues);
@@ -76,7 +89,9 @@ export default function ExploreList({ onSelect }: Props) {
     <div className="flex h-full flex-col">
       <div className="shrink-0 px-5 pb-4 pt-6">
         <h2 className="font-display text-[26px] font-medium leading-tight text-text-primary" data-testid="explore-count">
-          {isLoading && features.length === 0 ? "Noktalar yükleniyor" : `Bu bölgede ${features.length} nokta`}
+          {isLoading && features.length + servicePoints.length === 0
+            ? "Noktalar yükleniyor"
+            : `Bu bölgede ${features.length + servicePoints.length} nokta`}
         </h2>
         <div className="mt-2 flex items-center justify-between gap-3">
           <p className="text-[13px] text-text-secondary">
@@ -109,21 +124,33 @@ export default function ExploreList({ onSelect }: Props) {
               Tekrar dene
             </button>
           </div>
-        ) : sorted.length === 0 && !isLoading ? (
-          <div className="rounded-xl border border-dashed border-border-light p-5">
-            <p className="font-display text-lg text-text-primary">Bu bölgede nokta yok</p>
-            <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-              Haritayı uzaklaştır ya da filtreleri gevşet. Bildiğin bir yer varsa haritadan “Nokta ekle” ile işaretle.
-            </p>
-          </div>
         ) : (
-          <ul className="flex flex-col gap-7">
-            {sorted.map((feature) => (
-              <li key={feature.properties.id}>
-                <SpotCard feature={feature} onSelect={onSelect} />
-              </li>
-            ))}
-          </ul>
+          <>
+            <NearbyServices onSelect={onSelectServicePoint} />
+            {campsHidden ? null : (
+              <>
+                <h3 className="mb-3 font-display text-xl font-medium text-text-primary">
+                  Kamp ve karavan alanları{sorted.length ? ` (${sorted.length})` : ""}
+                </h3>
+                {sorted.length === 0 && !isLoading ? (
+                  <div className="rounded-xl border border-dashed border-border-light p-5">
+                    <p className="font-display text-lg text-text-primary">Bu bölgede kamp noktası yok</p>
+                    <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+                      Haritayı uzaklaştır ya da filtreleri gevşet. Bildiğin bir yer varsa haritadan “Nokta ekle” ile işaretle.
+                    </p>
+                  </div>
+                ) : (
+                  <ul className="flex flex-col gap-7">
+                    {sorted.map((feature) => (
+                      <li key={feature.properties.id}>
+                        <SpotCard feature={feature} onSelect={onSelect} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </>
         )}
       </div>
     </div>

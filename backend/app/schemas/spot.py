@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.models.enums import SpotCategory, SpotSource
+from app.models.enums import CREATABLE_SPOT_CATEGORIES, SpotCategory, SpotSource
 from app.schemas.common import Coordinates
 from app.schemas.compatibility import SpotCompatibilitySummary
 from app.schemas.dynamic_status import DynamicStatusRead
@@ -86,6 +86,15 @@ class SpotCreate(SpotBase):
     coordinates: Coordinates
     passability: SpotPassabilityCreate
     amenities: SpotAmenitiesCreate
+
+    @model_validator(mode="after")
+    def validate_category(self):
+        # Restoran/sağlık/WC/duş artık `/service-points` kaynağında; HOTEL_POOL yeni eklemeye kapalı.
+        if self.category not in CREATABLE_SPOT_CATEGORIES:
+            raise ValueError(
+                "Bu uç yalnızca kamp/karavan noktası ekler. Restoran, sağlık, WC ve duş için /service-points kullanın."
+            )
+        return self
 
 
 class SpotVerifyUpdate(BaseModel):

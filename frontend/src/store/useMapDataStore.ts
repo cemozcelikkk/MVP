@@ -9,14 +9,24 @@
  * geçirmeden panel/harita arasındaki bu tetiklemeyi taşır.
  */
 import { create } from "zustand";
-import type { SpotFeature } from "../lib/api";
+import type { ExternalStatus, ServicePointFeature, SpotFeature } from "../lib/api";
 
 interface MapDataState {
   features: SpotFeature[];
+  /** Aynı görünümdeki hizmet noktaları (restoran/sağlık/WC/duş) - `/service-points`. */
+  servicePoints: ServicePointFeature[];
+  /** Harici (OpenStreetMap) kaynağın son yanıttaki durumu; hizmet katmanı istenmediyse null. */
+  externalStatus: ExternalStatus | null;
+  /** Harici veri gösteriliyorsa zorunlu atıf metni (ODbL). */
+  attribution: string | null;
   isLoading: boolean;
   errorMessage: string | null;
   retryToken: number;
-  setResult: (features: SpotFeature[]) => void;
+  setResult: (
+    features: SpotFeature[],
+    servicePoints?: ServicePointFeature[],
+    external?: { status: ExternalStatus | null; attribution: string | null },
+  ) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (message: string | null) => void;
   retry: () => void;
@@ -24,10 +34,20 @@ interface MapDataState {
 
 export const useMapDataStore = create<MapDataState>((set) => ({
   features: [],
+  servicePoints: [],
+  externalStatus: null,
+  attribution: null,
   isLoading: false,
   errorMessage: null,
   retryToken: 0,
-  setResult: (features) => set({ features, errorMessage: null }),
+  setResult: (features, servicePoints = [], external) =>
+    set({
+      features,
+      servicePoints,
+      externalStatus: external?.status ?? null,
+      attribution: external?.attribution ?? null,
+      errorMessage: null,
+    }),
   setLoading: (isLoading) => set({ isLoading }),
   setError: (errorMessage) => set({ errorMessage }),
   retry: () => set((state) => ({ retryToken: state.retryToken + 1 })),

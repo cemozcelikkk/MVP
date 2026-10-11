@@ -1,4 +1,6 @@
 import ContentModerationTab from "./ContentModerationTab";
+import ServicePointModerationTab from "./ServicePointModerationTab";
+import CategoryReviewTab from "./CategoryReviewTab";
 /**
  * Moderasyon ekranı (yalnızca moderatör/admin): canlı bildirimleri incele, onayla / reddet /
  * geri çek, işlem geçmişini gör ve önceki adımdaki saha doğrulama denetimine (`verifications/audit`)
@@ -30,10 +32,12 @@ import { INPUT_CLASS } from "./FormControls";
 
 const PAGE_SIZE = 10;
 
-type Tab = ModerationView | "audit" | "content";
+type Tab = ModerationView | "audit" | "content" | "services" | "categories";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "content", label: "İçerik Bildirimleri" },
+  { value: "services", label: "Hizmet Noktaları" },
+  { value: "categories", label: "Kategori İnceleme" },
   { value: "pending", label: "Bekleyen" },
   { value: "active", label: "Aktif" },
   { value: "closed", label: "Reddedilen / Geri çekilen" },
@@ -309,7 +313,7 @@ export default function ModerationPanel() {
   }, [isOpen, auditSpotId]);
 
   useEffect(() => {
-    if (isOpen && isStaff && tab !== "audit" && tab !== "content") void load(tab, offset);
+    if (isOpen && isStaff && tab !== "audit" && tab !== "content" && tab !== "services" && tab !== "categories") void load(tab, offset);
   }, [isOpen, isStaff, tab, offset, load]);
 
   if (!isOpen || !isStaff) return null;
@@ -377,7 +381,7 @@ export default function ModerationPanel() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {tab === "content" ? <ContentModerationTab /> : tab === "audit" ? (
+          {tab === "content" ? <ContentModerationTab /> : tab === "services" ? <ServicePointModerationTab /> : tab === "categories" ? <CategoryReviewTab /> : tab === "audit" ? (
             <AuditTab key={auditSpotId ?? "manual"} initialSpotId={auditSpotId} />
           ) : (
             <>

@@ -18,6 +18,13 @@
  *   - z14+: vektör tile POI'leri - önemliler z14'te, küçük işletmeler z15'te. Restoran mutfağı (`cuisine`) tile'da taşınmadığından "balık
  * restoranı" ayrımı yapılamaz; `shop=seafood` (balıkçı) ayrı gösterilir.
  *
+ * Restoran/kafe ile hastane/sağlık ocağı bu süsleme katmanında ÇİZİLMEZ: onlar
+ * artık tıklanabilir hizmet noktası katmanından (KaravanTR kayıtları + OSM, bkz.
+ * MapView ve backend `/service-points`) gelir - aynı yerin iki işaretçisi olmasın.
+ * Tek istisna: görünüm hizmet katmanı için çok genişken (`external_status=too_wide`)
+ * düşük zoom katmanındaki hastane ikonları yön bulmak için gösterilir
+ * (bkz. `setBasemapHealthVisible`).
+ *
  * Yoğun bölgelerde MapLibre'nin sembol çakışma (collision) motoru kullanılır:
  * ikonlar üst üste binmez, `symbol-sort-key` ile önemli POI'ler önce
  * yerleşir; isim sığmazsa (`text-optional`) yalnızca ikon kalır.
@@ -47,11 +54,13 @@ interface PoiGroup {
   paths: string[];
   /** true: z14'te görünür ve çakışmada önce yerleşir; false: z15+. */
   major: boolean;
+  /** false: vektör tile katmanında çizilmez (hizmet noktası katmanı gösterir); ikon yine kaydedilir. */
+  fromTiles?: boolean;
 }
 
 export const POI_GROUPS: PoiGroup[] = [
-  { key: "hospital", subclasses: ["hospital"], color: "#B83A3F", major: true, paths: ["M8 6v12", "M16 6v12", "M8 12h8"] },
-  { key: "clinic", subclasses: ["clinic"], color: "#C65A5E", major: true, paths: ["M12 6.5v11", "M6.5 12h11"] },
+  { key: "hospital", subclasses: ["hospital"], color: "#B83A3F", major: true, fromTiles: false, paths: ["M8 6v12", "M16 6v12", "M8 12h8"] },
+  { key: "clinic", subclasses: ["clinic"], color: "#C65A5E", major: true, fromTiles: false, paths: ["M12 6.5v11", "M6.5 12h11"] },
   {
     key: "pharmacy", subclasses: ["pharmacy"], color: "#3C8D5A", major: true,
     paths: ["M5.5 13.5l8 -8a3.5 3.5 0 0 1 5 5l-8 8a3.5 3.5 0 0 1 -5 -5z", "M9.5 9.5l5 5"],
@@ -71,14 +80,6 @@ export const POI_GROUPS: PoiGroup[] = [
   },
   { key: "convenience", subclasses: ["convenience"], color: "#73904A", major: false, paths: ["M6 8h12l-1 12h-10z", "M9 8v-2a3 3 0 0 1 6 0v2"] },
   { key: "atm", subclasses: ["atm"], color: "#8C7340", major: false, paths: ["M3 7h18v10h-18z", "M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"] },
-  {
-    key: "restaurant", subclasses: ["restaurant"], color: "#C0682C", major: false,
-    paths: ["M7 3v18", "M4 3v5a3 3 0 0 0 6 0v-5", "M17 3c-2 0 -3 2 -3 6s1 4 3 4v8"],
-  },
-  {
-    key: "cafe", subclasses: ["cafe"], color: "#94684C", major: false,
-    paths: ["M5 9h11v5a5 5 0 0 1 -5 5h-1a5 5 0 0 1 -5 -5z", "M16 11h1.5a2.5 2.5 0 0 1 0 5h-1.5", "M8 3v3", "M12 3v3"],
-  },
   { key: "butcher", subclasses: ["butcher"], color: "#8E3B32", major: false, paths: ["M4 14l9 -9l6 6l-5 5h-5z", "M8 15l-4 4"] },
   {
     key: "seafood", subclasses: ["seafood"], color: "#2F7FA6", major: false,
@@ -170,8 +171,9 @@ export function addBasemapPois(map: MapLibreMap): void {
       const image = drawIcon(group);
       if (image) map.addImage(id, image, { pixelRatio: 2 });
     }
-    const major = POI_GROUPS.filter((g) => g.major);
-    const minor = POI_GROUPS.filter((g) => !g.major);
+    const tileGroups = POI_GROUPS.filter((g) => g.fromTiles !== false);
+    const major = tileGroups.filter((g) => g.major);
+    const minor = tileGroups.filter((g) => !g.major);
     // Önce eklenen altta kalır; sembol yerleşimi ÜSTTEKİ katmandan başlar ->
     // önemli POI'ler üstte, çakışmada küçük işletmelere karşı kazanır.
     if (!map.getLayer("kt-poi-minor")) map.addLayer(layerSpec("kt-poi-minor", minor, 15));
@@ -217,6 +219,18 @@ function lowZoomLayerSpec(): SymbolLayerSpecification {
       "text-opacity": ["step", ["zoom"], 0, 13, 1],
     },
   };
+}
+
+const HEALTH_HIDDEN_FILTER = ["!", ["in", ["get", "category"], ["literal", ["hospital", "clinic"]]]] as unknown as ExpressionSpecification;
+
+/**
+ * Düşük zoom süsleme katmanındaki hastane/sağlık ocağı ikonlarını aç/kapa. Hizmet
+ * katmanı sağlık noktalarını zaten (tıklanabilir) gösteriyorsa kapatılır; aksi halde
+ * aynı hastane iki kez görünürdü.
+ */
+export function setBasemapHealthVisible(map: MapLibreMap, visible: boolean): void {
+  if (!map.getLayer("kt-poi-lowzoom")) return;
+  map.setFilter("kt-poi-lowzoom", visible ? null : HEALTH_HIDDEN_FILTER);
 }
 
 function addLowZoomLayer(map: MapLibreMap) {

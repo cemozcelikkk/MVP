@@ -21,6 +21,54 @@ class SpotCategory(str, enum.Enum):
     HEALTH_CENTER = "HEALTH_CENTER"      # Sağlık ocağı / aile sağlığı merkezi
 
 
+# Yeni `spots` kaydı için kabul edilen kategoriler. `spots` artık yalnızca kamp/
+# karavan konaklama noktalarını taşır: restoran ve sağlık kayıtları
+# `service_points`'e taşındı (bkz. app.models.service_point), HOTEL_POOL ise
+# yeni eklemeye kapalı - mevcut kayıtlar haritada salt okunur kalır. Eski enum
+# değerleri DB'de (geçmiş satırlar/geri dönüş için) durur ama API onları kabul etmez.
+CREATABLE_SPOT_CATEGORIES = frozenset({SpotCategory.CAMPING})
+
+
+class ServicePointCategory(str, enum.Enum):
+    """Çevresel hizmet/ihtiyaç noktası türü (bkz. app.models.service_point).
+
+    Kamp alanı DEĞİLDİR: araç uyumluluğu, 7 boyutlu değerlendirme veya canlı
+    saha bildirimi taşımaz. Değerler API'de ve DB enum'unda BÜYÜK harfle taşınır.
+    """
+    MEAT_RESTAURANT = "MEAT_RESTAURANT"    # Et restoranı / mangal / kebap
+    FISH_RESTAURANT = "FISH_RESTAURANT"    # Balık restoranı
+    OTHER_RESTAURANT = "OTHER_RESTAURANT"  # Diğer restoran / kafe
+    HOSPITAL = "HOSPITAL"                  # Hastane
+    HEALTH_CENTER = "HEALTH_CENTER"        # Sağlık ocağı / aile sağlığı merkezi
+    WC = "WC"                              # Umumi tuvalet
+    SHOWER = "SHOWER"                      # Duş
+
+
+class ServicePointGroup(str, enum.Enum):
+    """Ekleme akışının ve harita şeridinin ana grupları; DB'de saklanmaz, kategoriden türetilir."""
+    FOOD = "food"      # Yeme & İçme - yıldız + yorum
+    HEALTH = "health"  # Sağlık - puan/yorum YOK, sadece tür + konum
+    BASIC = "basic"    # Temel ihtiyaçlar - ücret/kullanılabilirlik durumu
+
+
+SERVICE_POINT_GROUP_CATEGORIES: dict[ServicePointGroup, tuple[ServicePointCategory, ...]] = {
+    ServicePointGroup.FOOD: (
+        ServicePointCategory.MEAT_RESTAURANT,
+        ServicePointCategory.FISH_RESTAURANT,
+        ServicePointCategory.OTHER_RESTAURANT,
+    ),
+    ServicePointGroup.HEALTH: (ServicePointCategory.HOSPITAL, ServicePointCategory.HEALTH_CENTER),
+    ServicePointGroup.BASIC: (ServicePointCategory.WC, ServicePointCategory.SHOWER),
+}
+
+
+def service_point_group(category: ServicePointCategory) -> ServicePointGroup:
+    for group, categories in SERVICE_POINT_GROUP_CATEGORIES.items():
+        if category in categories:
+            return group
+    raise ValueError(category)  # pragma: no cover - her kategori bir gruba ait
+
+
 class SpotSource(str, enum.Enum):
     """Spot verisinin nereden geldiği. Kullanıcı formundan gelenler her zaman
     USER_ADDED'dir; diğerleri toplu içe aktarma (import) betiklerince atanır."""

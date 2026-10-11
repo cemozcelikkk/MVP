@@ -203,6 +203,19 @@ a {
   box-shadow: 0 0 0 4px rgb(var(--accent-brass) / 0.25);
 }
 
+/* --- Hizmet noktası (restoran/sağlık/WC/duş): kamp pininden bilinçli olarak
+   daha küçük ve yuvarlak - harita hiyerarşisinde konaklama noktaları baskın
+   kalır, hizmetler ikincil katman olarak okunur (bkz. lib/servicePoints.ts). --- */
+.spot-pin.service-pin {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+.service-pin .spot-pin__icon {
+  width: 16px;
+  height: 16px;
+}
+
 /* --- Küme baloncuğu: DOM marker (bkz. MapView kümeleme). Sayı tabular -
    hizalı rakam; çam zemin, okra kenarlık. --- */
 .spot-cluster {
@@ -340,4 +353,15 @@ a {
   .hero-question {
     transform: none;
   }
+}
+
+/* --- "Yakınımdakiler" merkez işareti (konumum / seçili kamp): mavi nokta + halka --- */
+.nearby-center {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background-color: #2f6fd6;
+  border: 3px solid #fffdf7;
+  box-shadow: 0 0 0 6px rgba(47, 111, 214, 0.18), 0 1px 4px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }

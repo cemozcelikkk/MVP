@@ -11,7 +11,6 @@ import {
   updateSpot,
   type ClearanceRequired,
   type RoadType,
-  type SpotCategory,
   type SpotFeature,
 } from "../lib/api";
 import { EMPTY_TRAVEL_INFO, type SpotTravelInfo } from "../lib/api";
@@ -22,14 +21,6 @@ import Button from "./ui/Button";
 import Modal from "./ui/Modal";
 import { Section } from "./ui/Section";
 
-const CATEGORY_OPTIONS: { value: SpotCategory; label: string }[] = [
-  { value: "CAMPING", label: "Kamp / Karavan Alanı" },
-  { value: "FISH_RESTAURANT", label: "Balık Restoranı" },
-  { value: "MEAT_RESTAURANT", label: "Et Restoranı" },
-  { value: "HOTEL_POOL", label: "Otel / Havuz" },
-  { value: "HOSPITAL", label: "Hastane" },
-  { value: "HEALTH_CENTER", label: "Sağlık Ocağı" },
-];
 
 const ROAD_TYPE_OPTIONS: { value: RoadType; label: string }[] = [
   { value: "asphalt", label: "Asfalt" },
@@ -57,7 +48,6 @@ export default function EditSpotModal({ spot, onClose, onUpdated }: Props) {
   const [pointLongitude,setPointLongitude] = useState(lon);
   const [title, setTitle] = useState(properties.title);
   const [description, setDescription] = useState(properties.description ?? "");
-  const [category, setCategory] = useState<SpotCategory>(properties.category);
   const [roadType, setRoadType] = useState<RoadType>(properties.passability?.road_type ?? "asphalt");
   const [maxVehicleLength, setMaxVehicleLength] = useState(
     properties.passability?.max_vehicle_length != null ? String(properties.passability.max_vehicle_length) : "",
@@ -99,7 +89,6 @@ export default function EditSpotModal({ spot, onClose, onUpdated }: Props) {
         ...(isStaff && (pointLatitude !== lat || pointLongitude !== lon) ? { coordinates: {latitude:pointLatitude,longitude:pointLongitude} } : {}),
         title,
         description: description.trim() || null,
-        category,
         passability: {
           road_type: roadType,
           max_vehicle_length: isUnlimitedLength ? null : Number(maxVehicleLength) || null,
@@ -179,9 +168,6 @@ export default function EditSpotModal({ spot, onClose, onUpdated }: Props) {
                 onChange={(event) => setDescription(event.target.value)}
                 className={`${INPUT_CLASS} resize-none`}
               />
-            </Field>
-            <Field label="Kategori">
-              <SegmentedGroup options={CATEGORY_OPTIONS} value={category} onChange={setCategory} />
             </Field>
           </div>
         </Section>

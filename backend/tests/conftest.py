@@ -143,3 +143,20 @@ async def make_check_in(db_session: AsyncSession) -> Callable[..., Coroutine[Non
         return row
 
     return _make
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _no_external_osm(monkeypatch):
+    """Testler hiçbir zaman gerçek Overpass'a gitmez: harici kaynak varsayılan olarak kapalı.
+    Harici veriyi sınayan testler `osm_enabled` fixture'ıyla sahte bir kaynak kurar."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "OSM_EXTERNAL_ENABLED", False)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _no_service_point_quotas(monkeypatch):
+    """Kullanıcı başına kotalar (RequestQuota satırları) varsayılan olarak kapalı; kota testi açar."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SERVICE_POINT_QUOTAS_ENABLED", False)

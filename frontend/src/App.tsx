@@ -10,7 +10,8 @@ import FavoritesDrawer from "./components/FavoritesDrawer";
 import MapView from "./components/MapView";
 import ModerationPanel from "./components/ModerationPanel";
 import VehicleProfilesModal from "./components/VehicleProfilesModal";
-import type { SpotFeature } from "./lib/api";
+import AddPlaceFlow from "./components/AddPlaceFlow";
+import type { ServicePointFeature, SpotFeature } from "./lib/api";
 import { useAuthStore } from "./store/useAuthStore";
 import { useCreateSpotStore } from "./store/useCreateSpotStore";
 import { usePanelStore } from "./store/usePanelStore";
@@ -30,6 +31,7 @@ function readHeroSeen(): boolean {
 function App() {
   const [isHeroVisible, setIsHeroVisible] = useState(() => !readHeroSeen() && !window.location.hash.includes("account_action"));
   const [selectedSpot, setSelectedSpot] = useState<SpotFeature | null>(null);
+  const [selectedServicePoint, setSelectedServicePoint] = useState<ServicePointFeature | null>(null);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const isPickingLocation = useCreateSpotStore((s) => s.isPickingLocation);
 
@@ -56,7 +58,17 @@ function App() {
    */
   function handleSelectSpot(feature: SpotFeature | null) {
     setSelectedSpot(feature);
+    // Boş harita tıklaması (null) her iki seçimi de kapatır.
+    setSelectedServicePoint(null);
     if (feature) usePanelStore.getState().open();
+  }
+
+  function handleSelectServicePoint(feature: ServicePointFeature | null) {
+    setSelectedServicePoint(feature);
+    if (feature) {
+      setSelectedSpot(null);
+      usePanelStore.getState().open();
+    }
   }
 
   function handleEnterMap() {
@@ -77,12 +89,24 @@ function App() {
       >
         <AppTopBar />
         <div className="relative flex flex-1 overflow-hidden">
-          <DiscoverPanel selectedSpot={selectedSpot} onSelectSpot={handleSelectSpot} onSpotUpdated={setSelectedSpot} />
-          <MapView onSelectSpot={handleSelectSpot} selectedSpotId={selectedSpot?.properties.id ?? null} />
+          <DiscoverPanel
+            selectedSpot={selectedSpot}
+            onSelectSpot={handleSelectSpot}
+            onSpotUpdated={setSelectedSpot}
+            selectedServicePoint={selectedServicePoint}
+            onSelectServicePoint={handleSelectServicePoint}
+          />
+          <MapView
+            onSelectSpot={handleSelectSpot}
+            selectedSpotId={selectedSpot?.properties.id ?? null}
+            onSelectServicePoint={handleSelectServicePoint}
+            selectedServicePointId={selectedServicePoint?.properties.id ?? null}
+          />
         </div>
 
         <AccountLinkHandler />
         <AuthModal />
+        <AddPlaceFlow onServicePointCreated={handleSelectServicePoint} />
         <CreateSpotModal onCreated={handleSelectSpot} />
         <FavoritesDrawer onShowOnMap={handleSelectSpot} />
         <VehicleProfilesModal />

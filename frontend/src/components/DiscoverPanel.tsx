@@ -10,8 +10,9 @@
  * Dar ekranda haritanın ÜZERİNDEN açılan tam yükseklikli bir drawer'a
  * dönüşür (scrim ile), harita düzeni etkilenmez.
  */
-import type { SpotFeature } from "../lib/api";
+import type { ServicePointFeature, SpotFeature } from "../lib/api";
 import { usePanelStore } from "../store/usePanelStore";
+import ServicePointDetail from "./ServicePointDetail";
 import SpotSearch from "./SpotSearch";
 import ExploreList from "./ExploreList";
 import SpotDetailSidebar from "./SpotDetailSidebar";
@@ -20,9 +21,18 @@ interface Props {
   selectedSpot: SpotFeature | null;
   onSelectSpot: (feature: SpotFeature | null) => void;
   onSpotUpdated?: (feature: SpotFeature) => void;
+  /** Seçili hizmet noktası (restoran/sağlık/WC/duş) - kamp noktasıyla aynı anda seçili olamaz. */
+  selectedServicePoint: ServicePointFeature | null;
+  onSelectServicePoint: (feature: ServicePointFeature | null) => void;
 }
 
-export default function DiscoverPanel({ selectedSpot, onSelectSpot, onSpotUpdated }: Props) {
+export default function DiscoverPanel({
+  selectedSpot,
+  onSelectSpot,
+  onSpotUpdated,
+  selectedServicePoint,
+  onSelectServicePoint,
+}: Props) {
   const isOpen = usePanelStore((s) => s.isOpen);
   const closePanel = usePanelStore((s) => s.close);
 
@@ -49,9 +59,24 @@ export default function DiscoverPanel({ selectedSpot, onSelectSpot, onSpotUpdate
       >
         <div className="h-full w-[88vw] max-w-[380px] lg:w-[380px] xl:w-[400px]">
           {selectedSpot ? (
-            <SpotDetailSidebar spot={selectedSpot} onClose={() => onSelectSpot(null)} onSpotUpdated={onSpotUpdated} />
+            <SpotDetailSidebar
+              spot={selectedSpot}
+              onClose={() => onSelectSpot(null)}
+              onSpotUpdated={onSpotUpdated}
+              onSelectServicePoint={onSelectServicePoint}
+            />
+          ) : selectedServicePoint ? (
+            <ServicePointDetail
+              key={selectedServicePoint.properties.id}
+              point={selectedServicePoint}
+              onClose={() => onSelectServicePoint(null)}
+              onUpdated={onSelectServicePoint}
+            />
           ) : (
-            <div className="h-full overflow-y-auto"><SpotSearch onSelect={onSelectSpot} /><ExploreList onSelect={onSelectSpot} /></div>
+            <div className="h-full overflow-y-auto">
+              <SpotSearch onSelect={onSelectSpot} />
+              <ExploreList onSelect={onSelectSpot} onSelectServicePoint={onSelectServicePoint} />
+            </div>
           )}
         </div>
       </div>

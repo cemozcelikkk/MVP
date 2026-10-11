@@ -246,6 +246,268 @@ export async function fetchSpotsInViewport(
   return data;
 }
 
+// --- /service-points: restoran / sağlık / WC / duş (bkz. backend app/api/v1/endpoints/service_points.py) ---
+// Kamp noktalarından (`/spots`) AYRI kaynak: araç uyumluluğu, 7 boyutlu
+// değerlendirme ve canlı saha bildirimi YOK; gruba göre hafif veri taşır.
+
+export type ServicePointCategory =
+  | "MEAT_RESTAURANT"
+  | "FISH_RESTAURANT"
+  | "OTHER_RESTAURANT"
+  | "HOSPITAL"
+  | "HEALTH_CENTER"
+  | "WC"
+  | "SHOWER";
+export type ServicePointGroup = "food" | "health" | "basic";
+export type FeeStatus = "free" | "paid" | "unknown";
+export type AvailabilityStatus = "available" | "unavailable" | "unknown";
+export type ServicePointReportReason = "wrong_location" | "closed" | "duplicate" | "wrong_info" | "other";
+
+export interface ServicePointProperties {
+  id: string;
+  category: ServicePointCategory;
+  group: ServicePointGroup;
+  name: string | null;
+  latitude: number;
+  longitude: number;
+  source: SpotSource;
+  /** Karşılık gelen OpenStreetMap nesnesi ("node/123"). */
+  osm_id: string | null;
+  /**
+   * true: yalnızca harici (OpenStreetMap) veri, henüz KaravanTR katkısı yok. Arayüz bunu
+   * "harita verisi, doğrulanmamış" olarak sunar - açık/çalışıyor bilgisi gibi gösterilmez.
+   */
+  is_external: boolean;
+  /** Yalnızca "Yakınımdakiler" (nearby) yanıtında: merkeze uzaklık (m). */
+  distance_m: number | null;
+  extra: Record<string, string | number | boolean | null>;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  /** Yalnızca Yeme & İçme. */
+  average_rating: number | null;
+  review_count: number;
+  /** Yalnızca WC / duş. */
+  fee_status: FeeStatus;
+  availability_status: AvailabilityStatus;
+  status_checked_at: string | null;
+  /** Moderatör onayı. */
+  is_verified: boolean;
+  /** "Hâlâ burada / hizmet veriyor" diyen farklı kullanıcı sayısı ve son teyit. */
+  confirmation_count: number;
+  last_confirmed_at: string | null;
+}
+
+export interface ServicePointFeature {
+  type: "Feature";
+  id: string;
+  geometry: { type: "Point"; coordinates: [number, number] };
+  properties: ServicePointProperties;
+}
+
+/**
+ * Harici kaynağın (OpenStreetMap) bu yanıta katkısı: `partial` - bazı bölgeler henüz
+ * çekilmedi (kısa süre sonra tekrar sorulabilir), `unavailable` - kaynağa ulaşılamadı
+ * (yalnızca KaravanTR kayıtları + önbellek), `too_wide` - yakınlaştırınca gelir.
+ */
+export type ExternalStatus = "ok" | "partial" | "unavailable" | "too_wide" | "disabled" | "not_needed";
+
+export interface ServicePointCollection {
+  type: "FeatureCollection";
+  features: ServicePointFeature[];
+  external_status: ExternalStatus;
+  /** Harici veri içeriyorsa gösterilmesi gereken atıf (ODbL). */
+  attribution: string | null;
+}
+
+export interface ServicePointFilterParams {
+  group?: ServicePointGroup[];
+  category?: ServicePointCategory[];
+}
+
+export async function fetchServicePointsInViewport(
+  params: { min_lng: number; min_lat: number; max_lng: number; max_lat: number } & ServicePointFilterParams,
+  signal?: AbortSignal,
+): Promise<ServicePointCollection> {
+  const { data } = await apiClient.get<ServicePointCollection>("/service-points", {
+    params,
+    signal,
+    paramsSerializer: { indexes: null },
+  });
+  return data;
+}
+
+/** "Yakınımdakiler": merkeze göre yakından uzağa sıralı, `distance_m` dolu. */
+export async function fetchNearbyServicePoints(
+  params: { latitude: number; longitude: number; radius_m: number } & ServicePointFilterParams,
+  signal?: AbortSignal,
+): Promise<ServicePointCollection> {
+  const { data } = await apiClient.get<ServicePointCollection>("/service-points/nearby", {
+    params,
+    signal,
+    paramsSerializer: { indexes: null },
+  });
+  return data;
+}
+
+export async function fetchServicePoint(id: string): Promise<ServicePointFeature> {
+  const { data } = await apiClient.get<ServicePointFeature>(`/service-points/${id}`);
+  return data;
+}
+
+export interface ServicePointCreatePayload {
+  category: ServicePointCategory;
+  coordinates: { latitude: number; longitude: number };
+  name?: string | null;
+  fee_status?: FeeStatus | null;
+  availability_status?: AvailabilityStatus | null;
+}
+
+export async function createServicePoint(payload: ServicePointCreatePayload): Promise<ServicePointFeature> {
+  const { data } = await apiClient.post<ServicePointFeature>("/service-points", payload);
+  return data;
+}
+
+export async function updateServicePoint(
+  id: string,
+  payload: { name?: string | null; category?: ServicePointCategory },
+): Promise<ServicePointFeature> {
+  const { data } = await apiClient.patch<ServicePointFeature>(`/service-points/${id}`, payload);
+  return data;
+}
+
+export async function deleteServicePoint(id: string): Promise<void> {
+  await apiClient.delete(`/service-points/${id}`);
+}
+
+export async function fetchServicePointNameSuggestion(
+  category: ServicePointCategory,
+  latitude: number,
+  longitude: number,
+): Promise<{ name: string | null; distance_m: number | null }> {
+  const { data } = await apiClient.get("/service-points/name-suggestion", { params: { category, latitude, longitude } });
+  return data;
+}
+
+export interface ServicePointReview {
+  id: string;
+  service_point_id: string;
+  user_id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchServicePointReviews(id: string): Promise<ServicePointReview[]> {
+  const { data } = await apiClient.get<ServicePointReview[]>(`/service-points/${id}/reviews`);
+  return data;
+}
+
+export async function fetchMyServicePointReview(id: string): Promise<ServicePointReview | null> {
+  const { data } = await apiClient.get<ServicePointReview | null>(`/service-points/${id}/reviews/me`);
+  return data;
+}
+
+export async function createServicePointReview(
+  id: string,
+  payload: { rating: number; comment?: string | null },
+): Promise<ServicePointReview> {
+  const { data } = await apiClient.post<ServicePointReview>(`/service-points/${id}/reviews`, payload);
+  return data;
+}
+
+export async function updateServicePointReview(
+  id: string,
+  reviewId: string,
+  payload: { rating?: number; comment?: string },
+): Promise<ServicePointReview> {
+  const { data } = await apiClient.patch<ServicePointReview>(`/service-points/${id}/reviews/${reviewId}`, payload);
+  return data;
+}
+
+export async function deleteServicePointReview(id: string, reviewId: string): Promise<void> {
+  await apiClient.delete(`/service-points/${id}/reviews/${reviewId}`);
+}
+
+export async function updateServicePointStatus(
+  id: string,
+  payload: { fee_status?: FeeStatus; availability_status?: AvailabilityStatus },
+): Promise<ServicePointFeature> {
+  const { data } = await apiClient.post<ServicePointFeature>(`/service-points/${id}/status`, payload);
+  return data;
+}
+
+/** "Hâlâ burada / hizmet veriyor" teyidi - kullanıcı başına nokta başına 24 saatte bir. */
+export async function confirmServicePoint(id: string): Promise<ServicePointFeature> {
+  const { data } = await apiClient.post<ServicePointFeature>(`/service-points/${id}/confirm`);
+  return data;
+}
+
+export async function verifyServicePoint(id: string, isVerified: boolean): Promise<ServicePointFeature> {
+  const { data } = await apiClient.patch<ServicePointFeature>(`/service-points/${id}/verify`, { is_verified: isVerified });
+  return data;
+}
+
+/** Taşıma sırasında belirsiz bulunup moderatör kararına bırakılan eski restoran/sağlık kaydı. */
+export interface CategoryReviewItem {
+  spot_id: string;
+  title: string;
+  category: SpotCategory;
+  latitude: number;
+  longitude: number;
+  reasons: string[];
+  reason_labels: string[];
+  review_count: number;
+  created_at: string;
+}
+
+export type CategoryReviewAction = "keep_as_camping" | "move_to_service" | "keep_as_is";
+
+export async function fetchCategoryReviewQueue(): Promise<CategoryReviewItem[]> {
+  const { data } = await apiClient.get<CategoryReviewItem[]>("/moderation/category-review");
+  return data;
+}
+
+export async function resolveCategoryReview(spotId: string, action: CategoryReviewAction): Promise<void> {
+  await apiClient.post(`/moderation/category-review/${spotId}`, { action });
+}
+
+export async function reportServicePoint(
+  id: string,
+  payload: { reason: ServicePointReportReason; description?: string | null },
+): Promise<void> {
+  await apiClient.post(`/service-points/${id}/reports`, payload);
+}
+
+export interface ServicePointReportRow {
+  id: string;
+  service_point_id: string;
+  reason: ServicePointReportReason;
+  description: string | null;
+  state: "pending" | "resolved" | "rejected";
+  resolution_note: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  point: ServicePointProperties;
+}
+
+export async function fetchServicePointReportQueue(
+  state: "pending" | "resolved" | "rejected" = "pending",
+): Promise<ServicePointReportRow[]> {
+  const { data } = await apiClient.get<ServicePointReportRow[]>("/moderation/service-point-reports", {
+    params: { state, limit: 50 },
+  });
+  return data;
+}
+
+export async function resolveServicePointReport(
+  reportId: string,
+  payload: { action: "resolve" | "reject"; remove_point?: boolean; note?: string | null },
+): Promise<void> {
+  await apiClient.post(`/moderation/service-point-reports/${reportId}/resolve`, payload);
+}
+
 // --- GET /basemap-pois (bkz. backend app/api/v1/endpoints/basemap_pois.py) ---
 
 /** Düşük zoom (11-13) harita altlığı için önemli OSM noktaları - KaravanTR kaydı DEĞİL. */

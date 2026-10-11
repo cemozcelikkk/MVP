@@ -58,6 +58,8 @@ import FieldFreshnessSection from "./FieldFreshnessSection";
 import LiveStatusSection from "./LiveStatusSection";
 import ReportStatusModal from "./ReportStatusModal";
 import SpotReviewsSection from "./SpotReviewsSection";
+import SpotNearbyServices from "./SpotNearbyServices";
+import type { ServicePointFeature } from "../lib/api";
 import Button from "./ui/Button";
 import { CollapsibleSection, Section } from "./ui/Section";
 
@@ -96,6 +98,8 @@ interface Props {
   onClose: () => void;
   /** Durum bildirimi gibi spot'u yerinde güncelleyen işlemlerden sonra çağrılır. */
   onSpotUpdated?: (feature: SpotFeature) => void;
+  /** "Yakındaki Hizmetler"den bir hizmet noktası seçildiğinde. */
+  onSelectServicePoint?: (feature: ServicePointFeature) => void;
 }
 
 /**
@@ -103,10 +107,16 @@ interface Props {
  * `key={spot.properties.id}` ile her yeni spotta yeniden mount edilir, böylece
  * lightbox/favori gibi geçici UI durumu bir efekt gerekmeden sıfırlanmış olur.
  */
-export default function SpotDetailSidebar({ spot, onClose, onSpotUpdated }: Props) {
+export default function SpotDetailSidebar({ spot, onClose, onSpotUpdated, onSelectServicePoint }: Props) {
   if (!spot) return null;
   return (
-    <SpotDetailPanel key={spot.properties.id} spot={spot} onClose={onClose} onSpotUpdated={onSpotUpdated} />
+    <SpotDetailPanel
+      key={spot.properties.id}
+      spot={spot}
+      onClose={onClose}
+      onSpotUpdated={onSpotUpdated}
+      onSelectServicePoint={onSelectServicePoint}
+    />
   );
 }
 
@@ -114,10 +124,12 @@ function SpotDetailPanel({
   spot,
   onClose,
   onSpotUpdated,
+  onSelectServicePoint,
 }: {
   spot: SpotFeature;
   onClose: () => void;
   onSpotUpdated?: (feature: SpotFeature) => void;
+  onSelectServicePoint?: (feature: ServicePointFeature) => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [isFavorited, setIsFavorited] = useState(false);
@@ -369,6 +381,9 @@ function SpotDetailPanel({
                   : "Buradayım / Check-in"}
           </Button>
         </Section>
+
+        {/* --- 4b) Yakındaki hizmetler (restoran, sağlık, WC, duş) --- */}
+        <SpotNearbyServices center={[lon, lat]} title={properties.title} onSelect={onSelectServicePoint} />
 
         {/* --- 5) Fotoğraf özeti --- */}
         {properties.photos.length > 0 ? (

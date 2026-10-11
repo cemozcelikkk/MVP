@@ -31,6 +31,7 @@ from app.services.live_report_service import (
 )
 from app.services.review_service import get_spot_dimension_ratings
 from app.services.spot_service import (
+    SpotCategoryNotAllowedError,
     SpotNotFoundError,
     SpotPermissionError,
     add_dynamic_status,
@@ -472,6 +473,11 @@ async def update_spot_endpoint(
     """
     try:
         return await update_spot(db, spot_id=spot_id, data=payload, current_user=current_user)
+    except SpotCategoryNotAllowedError:
+        raise HTTPException(
+            status_code=422,
+            detail="Kamp noktaları yalnızca kamp kategorisinde tutulabilir; restoran, sağlık, WC ve duş ayrı nokta türleridir.",
+        )
     except SpotNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Spot bulunamadı.")
     except SpotPermissionError:

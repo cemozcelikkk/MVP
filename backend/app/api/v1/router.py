@@ -35,3 +35,7 @@ from app.api.v1.endpoints import basemap_pois
 
 api_router.include_router(basemap_pois.router)
 
+
+from app.api.v1.endpoints import service_points
+
+api_router.include_router(service_points.router)

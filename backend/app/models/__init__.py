@@ -10,8 +10,16 @@ from app.models.check_in import CheckIn
 from app.models.dynamic_status import DynamicStatus
 from app.models.field_verification import SpotFieldVerification
 from app.models.live_report_event import LiveReportEvent
+from app.models.osm_cache import OsmPoi, OsmTile
 from app.models.review import Review
 from app.models.saved_list import SavedList, SavedListItem
+from app.models.service_point import (
+    ServicePoint,
+    ServicePointConfirmation,
+    ServicePointReport,
+    ServicePointReview,
+    ServicePointStatusUpdate,
+)
 from app.models.spot import Spot
 from app.models.spot_amenities import SpotAmenities
 from app.models.spot_passability import SpotPassability
@@ -37,9 +45,16 @@ __all__ = [
     "User",
     "SavedList",
     "SavedListItem",
+    "ServicePoint",
+    "ServicePointConfirmation",
+    "ServicePointReport",
+    "ServicePointReview",
+    "ServicePointStatusUpdate",
     "VehicleProfile",
     "SpotFieldVerification",
     "LiveReportEvent",
+    "OsmPoi",
+    "OsmTile",
 ]
 
 from app.models.account_token import AccountToken, PlaceCache, RequestQuota

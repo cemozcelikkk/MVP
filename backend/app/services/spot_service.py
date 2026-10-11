@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models.dynamic_status import ACTIVE_REPORT_CONDITION, DynamicStatus  # noqa: F401
-from app.models.enums import ClearanceRequired, SpotCategory, SpotSource, UserRole
+from app.models.enums import CREATABLE_SPOT_CATEGORIES, ClearanceRequired, SpotCategory, SpotSource, UserRole
 from app.models.spot import Spot
 from app.models.spot_amenities import SpotAmenities
 from app.models.spot_passability import SpotPassability
@@ -36,6 +36,10 @@ class SpotNotFoundError(Exception):
 
 class SpotPermissionError(Exception):
     """Giriş yapan kullanıcı ne spot'un sahibi ne de MODERATOR/ADMIN."""
+
+
+class SpotCategoryNotAllowedError(Exception):
+    """Spot, yeni eklemeye kapalı bir kategoriye (restoran/sağlık/otel) taşınmak isteniyor."""
 
 
 # Aktif canlı durum koşulu (`dynamic_status.ACTIVE_REPORT_CONDITION`): moderasyon durumu
@@ -367,7 +371,11 @@ async def update_spot(
         spot.title = data.title
     if "description" in data.model_fields_set:
         spot.description = data.description
-    if data.category is not None:
+    if data.category is not None and data.category != spot.category:
+        # Eski (HOTEL_POOL vb.) bir kayıt kendi kategorisinde kalabilir ama hiçbir
+        # spot yeni eklemeye kapalı bir kategoriye TAŞINAMAZ.
+        if data.category not in CREATABLE_SPOT_CATEGORIES:
+            raise SpotCategoryNotAllowedError(data.category)
         spot.category = data.category
     if "altitude" in data.model_fields_set:
         spot.altitude = data.altitude

@@ -68,6 +68,31 @@ class Settings(BaseSettings):
     GEOCODER_URL: str = "https://nominatim.openstreetmap.org/search"
     GEOCODER_USER_AGENT: str = "KaravanTR/0.1 (local development)"
 
+    # --- Harici hizmet noktası kaynağı: OpenStreetMap / Overpass (bkz. app/services/osm_source.py) ---
+    # Kapalıysa yalnızca KaravanTR kayıtları + periyodik basemap_pois (sağlık) gösterilir.
+    OSM_EXTERNAL_ENABLED: bool = True
+    OVERPASS_URL: str = "https://overpass-api.de/api/interpreter"
+    # Ana sunucu meşgulken (429/504/zaman aşımı) yalnızca BİR KEZ denenecek yedek kamu sunucuları.
+    OVERPASS_FALLBACK_URLS: list[str] = ["https://overpass.kumi.systems/api/interpreter"]
+    # Overpass kullanım politikası: istemci kendini tanıtmalı (uygulama adı + iletişim).
+    OVERPASS_USER_AGENT: str = "KaravanTR/0.1 (local development)"
+    # Hücre boyu (derece). 0.05° ≈ 5.5 km; bir hücre bir kez çekilip TTL boyunca cache'ten okunur.
+    OSM_TILE_DEGREES: float = 0.05
+    OSM_TILE_TTL_HOURS: int = 24 * 7
+    # Overpass hatasında hücre bu süre boyunca yeniden denenmez (servisi zorlamamak için).
+    OSM_FAILURE_BACKOFF_MINUTES: int = 15
+    # Tek istekte çekilecek en fazla eksik hücre; fazlası sonraki isteklere kalır ("partial").
+    OSM_MAX_TILES_PER_FETCH: int = 6
+    # Görünür alan bundan fazla hücre kaplıyorsa harici veri istenmez (çok uzak zoom).
+    OSM_MAX_TILES_PER_VIEW: int = 24
+    # "Yakınımdakiler" (merkez + yarıçap, en yakından sıralı): 20 km yarıçapı kapsayacak sınır.
+    OSM_MAX_TILES_PER_NEARBY: int = 120
+    # true: eksik hücreler istek beklemeden arka planda çekilir (yanıt "partial" döner).
+    OSM_FETCH_IN_BACKGROUND: bool = True
+    # Tüm sunucu için dakikada en fazla Overpass isteği (paylaşılan kamu servisi).
+    OVERPASS_REQUESTS_PER_MINUTE: int = 6
+    OVERPASS_TIMEOUT_SECONDS: int = 15
+
     FRONTEND_URL: str = "http://localhost:5173"
     MAIL_BACKEND: Literal["file", "smtp"] = "file"
     MAIL_OUTBOX_DIR: Path = Path(".mail-outbox")
@@ -81,6 +106,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_READ_PER_MINUTE: int = 180
     RATE_LIMIT_WRITE_PER_MINUTE: int = 30
     RATE_LIMIT_AUTH_PER_MINUTE: int = 10
+    # Hizmet noktası katkıları için kullanıcı başına kotalar (bkz. service_point_service.QUOTAS).
+    SERVICE_POINT_QUOTAS_ENABLED: bool = True
 
     # --- Medya / Depolama ---
     # "local": backend/uploads/ altına yazar (geliştirme ortamı varsayılanı).

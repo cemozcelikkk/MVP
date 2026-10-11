@@ -4,7 +4,28 @@
  * ve API'nin beklediği query param şekline dönüştürmek.
  */
 import { create } from "zustand";
-import type { SpotCategory } from "../lib/api";
+import type { ServicePointCategory, ServicePointFilterParams, ServicePointGroup } from "../lib/api";
+
+/** Ekleme akışının ana grupları: kamp noktaları (`/spots`) + hizmet grupları (`/service-points`). */
+export type PlaceGroup = "camping" | ServicePointGroup;
+
+/**
+ * Harita şeridinin / "Yakınımdakiler"in filtre anahtarları. WC ve duş ayrı ayrı
+ * seçilebilir (ikisi de "Temel İhtiyaçlar" grubunda olsa da).
+ */
+export type PlaceFilter = "camping" | "food" | "health" | "wc" | "shower";
+export const SERVICE_FILTERS: Exclude<PlaceFilter, "camping">[] = ["food", "health", "wc", "shower"];
+
+/** Seçili hizmet filtrelerini `/service-points` parametrelerine çevirir; boş dizi = hepsi. */
+export function serviceFilterParams(filters: PlaceFilter[]): ServicePointFilterParams {
+  const group: ServicePointGroup[] = [];
+  const category: ServicePointCategory[] = [];
+  if (filters.includes("food")) group.push("food");
+  if (filters.includes("health")) group.push("health");
+  if (filters.includes("wc")) category.push("WC");
+  if (filters.includes("shower")) category.push("SHOWER");
+  return { ...(group.length ? { group } : {}), ...(category.length ? { category } : {}) };
+}
 
 export type FilterToggleKey =
   | "hasToilet"
@@ -63,15 +84,15 @@ const INITIAL_VALUES: FilterValues = {
 
 interface FilterState extends FilterValues {
   /**
-   * Harita üstündeki kategori şeridinin (bkz. `CategoryPills`) seçimi. Boş
-   * dizi = "Tümü" (kategori filtresi yok). Backend'e `category` parametresi
-   * olarak gider; açık/kapalı anahtarlardan ayrı tutulur ve "Tüm Filtreler"
-   * rozetine/`reset`ine dahil değildir (şeridin kendi "Tümü" düğmesi var).
+   * Harita üstündeki grup şeridinin (bkz. `CategoryPills`) seçimi. Boş dizi =
+   * "Tümü". "camping" kamp noktalarını (`/spots?category=CAMPING`), diğerleri
+   * hizmet noktası gruplarını (`/service-points?group=...`) açar. Açık/kapalı
+   * anahtarlardan ayrı tutulur ve "Tüm Filtreler" rozetine/`reset`ine dahil
+   * değildir (şeridin kendi "Tümü" düğmesi var).
    */
-  selectedCategories: SpotCategory[];
+  selectedGroups: PlaceFilter[];
   toggle: (key: FilterToggleKey) => void;
-  /** Bir kategori grubunu (ör. Sağlık = HOSPITAL + HEALTH_CENTER) seçer/bırakır. */
-  toggleCategoryGroup: (group: readonly SpotCategory[]) => void;
+  toggleGroup: (group: PlaceFilter) => void;
   /** "Tümü" - kategori filtresini kaldırır. */
   clearCategories: () => void;
   /** "Filtreleri temizle" - Üst bar / Tüm Filtreler modalındaki ortak eylem. */
@@ -80,25 +101,22 @@ interface FilterState extends FilterValues {
 
 export const useFilterStore = create<FilterState>((set) => ({
   ...INITIAL_VALUES,
-  selectedCategories: [],
+  selectedGroups: [],
   toggle: (key) => set((state) => ({ [key]: !state[key] }) as Pick<FilterState, typeof key>),
-  toggleCategoryGroup: (group) =>
-    set((state) => {
-      const isSelected = group.every((c) => state.selectedCategories.includes(c));
-      return {
-        selectedCategories: isSelected
-          ? state.selectedCategories.filter((c) => !group.includes(c))
-          : [...state.selectedCategories, ...group.filter((c) => !state.selectedCategories.includes(c))],
-      };
-    }),
-  clearCategories: () => set({ selectedCategories: [] }),
+  toggleGroup: (group) =>
+    set((state) => ({
+      selectedGroups: state.selectedGroups.includes(group)
+        ? state.selectedGroups.filter((g) => g !== group)
+        : [...state.selectedGroups, group],
+    })),
+  clearCategories: () => set({ selectedGroups: [] }),
   reset: () => set(INITIAL_VALUES),
 }));
 
 /**
  * Aktif filtre sayısı - "Tüm Filtreler" butonundaki rozet için (bkz. AppTopBar).
  * Yalnızca açık/kapalı anahtarları sayar; store'un tamamı verilse bile
- * eylem fonksiyonları ve `selectedCategories` sayılmaz.
+ * eylem fonksiyonları ve `selectedGroups` sayılmaz.
  */
 export function countActiveFilters(state: FilterValues): number {
   return (Object.keys(INITIAL_VALUES) as (keyof FilterValues)[]).filter((key) => state[key] === true).length;

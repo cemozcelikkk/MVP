@@ -73,8 +73,8 @@ export const CATEGORY_LANDSCAPE_STYLE: Record<SpotCategory, CategoryLandscapeSty
   HEALTH_CENTER: { sky: "#F7EEF0", ground: "#EEDFE2", ridgeFar: "#D3B1B8", ridgeNear: "#B58C95", sun: "#F0D9A0" },
 };
 
-/** 24x24 viewBox, stroke-width 2 `<path>` gövdeleri (çoğu Tabler ikon setinden). */
-const CATEGORY_ICON_PATHS: Record<SpotCategory, string> = {
+/** 24x24 viewBox, stroke-width 2 `<path>` gövdeleri (çoğu Tabler ikon setinden). Hizmet noktaları da bunları paylaşır (bkz. servicePoints.ts). */
+export const CATEGORY_ICON_PATHS: Record<SpotCategory, string> = {
   // Tabler "tent".
   CAMPING: `<path d="M11 14l4 6h6l-9 -16l-9 16h6l4 -6" />`,
   // Tabler "fish".
@@ -93,7 +93,12 @@ const CATEGORY_ICON_PATHS: Record<SpotCategory, string> = {
 export function categoryIconSvg(category: SpotCategory): string {
   const style = CATEGORY_PIN_STYLE[category] ?? CATEGORY_PIN_STYLE[FALLBACK_CATEGORY];
   const paths = CATEGORY_ICON_PATHS[category] ?? CATEGORY_ICON_PATHS[FALLBACK_CATEGORY];
-  return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="${style.icon}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
+  return lineIconSvg(paths, style.icon);
+}
+
+/** Tek renkli çizgi ikon (24x24 viewBox). `currentColor` dolgulu metin öğeleri de aynı rengi alır. */
+export function lineIconSvg(paths: string, color: string): string {
+  return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="${color}" color="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
 }
 
 /**

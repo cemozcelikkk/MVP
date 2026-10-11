@@ -42,13 +42,10 @@ import app.models  # noqa: F401  -- tüm modelleri mapper'a kaydeder
 from app.core.database import AsyncSessionLocal
 from app.models.basemap_poi import BASEMAP_POI_CATEGORIES, BasemapPoi
 from app.utils.geo import lonlat_to_wkb
-from scripts.fetch_osm_places import (
-    DEFAULT_OVERPASS_URL,
-    MAX_TAG_VALUE_LENGTH,
-    OverpassError,
-    _coordinates,
-    fetch_overpass,
-)
+from app.core.config import settings
+from app.services.osm_source import MAX_TAG_VALUE_LENGTH, OverpassError, _coordinates, fetch_overpass
+
+DEFAULT_OVERPASS_URL = settings.OVERPASS_URL
 
 # Türkiye'yi (adalar dahil) kapsayan kutu: (güney, batı, kuzey, doğu).
 TURKEY_BBOX = (35.8, 25.6, 42.2, 44.9)
@@ -143,7 +140,7 @@ def fetch_cell(cell: tuple[float, float, float, float], url: str) -> list[dict[s
     """Bir hücreyi, meşgul/zaman aşımı yanıtlarında artan beklemeyle tekrar deneyerek çeker."""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            return fetch_overpass(build_query(cell), url=url, timeout_s=240, allow_partial=False)
+            return fetch_overpass(build_query(cell), url=url, timeout_s=240)  # eksik sonuç hata sayılır
         except OverpassError as exc:
             if not exc.retryable or attempt == MAX_ATTEMPTS:
                 raise

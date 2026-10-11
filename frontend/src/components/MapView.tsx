@@ -44,17 +44,32 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 
 setWorkerUrl(maplibreWorkerUrl);
-import { AlertTriangle, ChevronDown, Loader2, MapPinned, Navigation, Plus, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Navigation, Plus, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSpotsInViewport, type SpotFeature } from "../lib/api";
+import {
+  fetchNearbyServicePoints,
+  fetchServicePointsInViewport,
+  fetchSpotsInViewport,
+  type ServicePointCollection,
+  type ServicePointFeature,
+  type SpotFeature,
+} from "../lib/api";
 import { applyCategoryPinVars, hasActiveWarning, pinInnerHtml } from "../lib/pinStyle";
+import { serviceIconSvg, servicePinColors, servicePointTitle } from "../lib/servicePoints";
 import { useAuthStore } from "../store/useAuthStore";
 import { useCreateSpotStore } from "../store/useCreateSpotStore";
 import { useFavoritesStore } from "../store/useFavoritesStore";
 import { useMapDataStore } from "../store/useMapDataStore";
-import { filtersToQueryParams, useFilterStore } from "../store/filters";
+import {
+  countActiveFilters,
+  filtersToQueryParams,
+  serviceFilterParams,
+  type PlaceFilter,
+  useFilterStore,
+} from "../store/filters";
+import { useNearbyStore } from "../store/useNearbyStore";
 import { useVehicleProfileStore } from "../store/useVehicleProfileStore";
-import { addBasemapPois, attachBasemapPoiLoader } from "../lib/mapPoi";
+import { addBasemapPois, attachBasemapPoiLoader, setBasemapHealthVisible } from "../lib/mapPoi";
 import { applyOutdoorStyle, OUTDOOR_COLORS } from "../lib/mapStyle";
 import CategoryPills from "./CategoryPills";
 
@@ -66,6 +81,35 @@ import CategoryPills from "./CategoryPills";
 const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
 const SPOTS_SOURCE_ID = "spots";
+const NEARBY_SOURCE_ID = "nearby-radius";
+// Harici kaynak bölgeyi arka planda çekerken ("partial") artan aralıklarla yeniden sorulur.
+const PARTIAL_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000];
+
+/** Merkez + yarıçaptan (metre) 64 köşeli daire poligonu - "Yakınımdakiler" alanı. */
+interface CircleFeature {
+  type: "Feature";
+  properties: Record<string, never>;
+  geometry: { type: "Polygon"; coordinates: [number, number][][] };
+}
+
+function circlePolygon(center: [number, number], radiusM: number): CircleFeature {
+  const [lng, lat] = center;
+  const coords: [number, number][] = [];
+  for (let i = 0; i <= 64; i++) {
+    const angle = (i / 64) * 2 * Math.PI;
+    const dLat = (radiusM / 111_320) * Math.sin(angle);
+    const dLng = (radiusM / (111_320 * Math.cos((lat * Math.PI) / 180))) * Math.cos(angle);
+    coords.push([lng + dLng, lat + dLat]);
+  }
+  return { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [coords] } };
+}
+
+const EMPTY_SERVICES: ServicePointCollection = {
+  type: "FeatureCollection",
+  features: [],
+  external_status: "not_needed",
+  attribution: null,
+};
 const CLUSTER_ENGINE_LAYER_ID = "spots-cluster-engine"; // görünmez - sadece tiling/kümeleme tetikler
 
 // Türkiye'nin coğrafi merkezi - ilk açılış görünümü.
@@ -74,8 +118,10 @@ const INITIAL_ZOOM = 6;
 // Kullanıcı tüm Türkiye'yi tek ekranda görebilir ama uzaya kadar uzaklaşamaz.
 const MIN_ZOOM = 5.2;
 const MAX_ZOOM = 18;
-// Bu zoom'a kadar kümelenir; sonrasında tekil kategori piktogramları görünür.
-const CLUSTER_MAX_ZOOM = 13;
+// Bu zoom'a kadar kümelenir; sonrasında tekil kategori piktogramları görünür. Hizmet
+// noktaları (OSM restoranları vb.) kasaba merkezlerinde çok yoğun olduğundan 15'e kadar
+// kümelenir; 16+ sokak ölçeğinde her işaretçi ayrı görünür.
+const CLUSTER_MAX_ZOOM = 15;
 const CLUSTER_RADIUS = 56;
 // Harita bu kutunun dışına sürüklenemez/kaydırılamaz - Türkiye + kıyı
 // sularını (Ege/Akdeniz güneybatı, Karadeniz/Doğu kuzeydoğu) kapsar.
@@ -87,10 +133,23 @@ const TURKEY_BOUNDS: [[number, number], [number, number]] = [
 interface Props {
   onSelectSpot?: (feature: SpotFeature | null) => void;
   selectedSpotId?: string | null;
+  onSelectServicePoint?: (feature: ServicePointFeature) => void;
+  selectedServicePointId?: string | null;
+}
+
+/**
+ * Haritadaki tek bir işaretçi: kamp noktası (`/spots`) VEYA hizmet noktası
+ * (`/service-points`). İkisi AYNI kümeleme kaynağını paylaşır (küme sayıları
+ * görünen her şeyi kapsar); anahtar önekleri (`spot-` / `svc-`) id çakışmasını önler.
+ */
+type MapItem = { kind: "spot"; feature: SpotFeature } | { kind: "service"; feature: ServicePointFeature };
+
+function itemKey(item: MapItem): string {
+  return `${item.kind === "spot" ? "spot" : "svc"}-${item.feature.properties.id}`;
 }
 
 type RenderedItem =
-  | { kind: "point"; id: string; lng: number; lat: number; feature: SpotFeature }
+  | { kind: "point"; id: string; lng: number; lat: number; item: MapItem }
   | { kind: "cluster"; id: string; clusterId: number; lng: number; lat: number; count: number };
 
 /** Reconciliation'ı atlamak için ucuz bir "değişti mi" imzası. */
@@ -98,26 +157,34 @@ function signatureOf(items: RenderedItem[]): string {
   return items
     .map((it) =>
       it.kind === "point"
-        ? `p:${it.id}:${it.lng.toFixed(5)}:${it.lat.toFixed(5)}:${it.feature.properties.compatibility?.status ?? ""}`
+        ? `p:${it.id}:${it.lng.toFixed(5)}:${it.lat.toFixed(5)}:${
+            it.item.kind === "spot" ? (it.item.feature.properties.compatibility?.status ?? "") : it.item.feature.properties.category
+          }`
         : `c:${it.clusterId}:${it.lng.toFixed(4)}:${it.lat.toFixed(4)}:${it.count}`,
     )
     .sort()
     .join("|");
 }
 
-export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
+export default function MapView({ onSelectSpot, selectedSpotId, onSelectServicePoint, selectedServicePointId }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Map<string, Marker>>(new Map());
   const abortRef = useRef<AbortController | null>(null);
   const pendingMarkerRef = useRef<Marker | null>(null);
-  const featuresByIdRef = useRef<Map<string, SpotFeature>>(new Map());
+  const featuresByIdRef = useRef<Map<string, MapItem>>(new Map());
   const lastSignatureRef = useRef<string>("");
   // `renderMarkers`/reconciliation (useCallback) `onSelectSpot` değişmediği
   // sürece asla yeniden yaratılmıyor - bu yüzden `selectedSpotId` prop'unu
   // doğrudan kapatırsa (closure) değeri donar. Güncel değeri bir ref
   // üzerinden okutuyoruz.
+  // (Seçili işaretçinin ANAHTARINI - `spot-<id>` / `svc-<id>` - tutar.)
   const selectedSpotIdRef = useRef<string | null>(null);
+  const selectedKey = selectedSpotId
+    ? `spot-${selectedSpotId}`
+    : selectedServicePointId
+      ? `svc-${selectedServicePointId}`
+      : null;
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -126,6 +193,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
   const tripRoute = useTripStore(s=>s.route);
   const focusedLocation = useCreateSpotStore((s) => s.focusedLocation);
   const focusedSpot = useCreateSpotStore((s) => s.focusedSpot);
+  const focusedServicePoint = useCreateSpotStore((s) => s.focusedServicePoint);
   const deletedSpotId = useCreateSpotStore((s) => s.deletedSpotId);
   const updatedSpot = useCreateSpotStore((s) => s.updatedSpot);
 
@@ -144,7 +212,13 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
   const onlyVerified = useFilterStore((s) => s.onlyVerified);
   const onlyFavorites = useFilterStore((s) => s.onlyFavorites);
   const vehicleCompatibleOnly = useFilterStore((s) => s.vehicleCompatibleOnly);
-  const selectedCategories = useFilterStore((s) => s.selectedCategories);
+  const selectedGroups = useFilterStore((s) => s.selectedGroups);
+  const nearbyMode = useNearbyStore((s) => s.mode);
+  const nearbyCenter = useNearbyStore((s) => s.center);
+  const nearbyRadius = useNearbyStore((s) => s.radiusM);
+  const nearbyFitToken = useNearbyStore((s) => s.fitToken);
+  const partialRetriesRef = useRef(0);
+  const partialTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const favoriteIds = useFavoritesStore((s) => s.favoriteIds);
   const fetchFavorites = useFavoritesStore((s) => s.fetchFavorites);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -161,13 +235,33 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     if (onlyFavorites) fetchFavorites();
   }, [onlyFavorites, fetchFavorites]);
 
+  const buildServiceMarker = useCallback(
+    (feature: ServicePointFeature) => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "spot-pin service-pin";
+      if (`svc-${feature.properties.id}` === selectedSpotIdRef.current) el.classList.add("spot-pin--selected");
+      const colors = servicePinColors(feature.properties.category);
+      el.style.setProperty("--pin-fill", colors.fill);
+      el.style.setProperty("--pin-border", colors.border);
+      el.innerHTML = `<span class="spot-pin__icon">${serviceIconSvg(feature.properties.category)}</span>`;
+      el.setAttribute("aria-label", servicePointTitle(feature.properties));
+      el.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onSelectServicePoint?.(feature);
+      });
+      return el;
+    },
+    [onSelectServicePoint],
+  );
+
   const buildPointMarker = useCallback(
     (feature: SpotFeature) => {
       const id = feature.properties.id;
       const el = document.createElement("button");
       el.type = "button";
       el.className = "spot-pin";
-      if (id === selectedSpotIdRef.current) el.classList.add("spot-pin--selected");
+      if (`spot-${id}` === selectedSpotIdRef.current) el.classList.add("spot-pin--selected");
       // "caution" uyumluluğu (fiziksel sınırlar dikkat gerektiriyor) renkten
       // BAĞIMSIZ ayrı bir rozetle işaretlenir (bkz. lib/pinStyle.ts).
       if (feature.properties.compatibility?.status === "caution") {
@@ -232,12 +326,12 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
         seenClusters.add(clusterId);
         items.push({ kind: "cluster", id: `cluster-${clusterId}`, clusterId, lng, lat, count: f.properties.point_count as number });
       } else {
-        const id = f.properties?.id as string;
-        if (seenPoints.has(id)) continue;
-        seenPoints.add(id);
-        const original = featuresByIdRef.current.get(id);
+        const key = f.properties?.key as string;
+        if (seenPoints.has(key)) continue;
+        seenPoints.add(key);
+        const original = featuresByIdRef.current.get(key);
         if (!original) continue;
-        items.push({ kind: "point", id: `spot-${id}`, lng, lat, feature: original });
+        items.push({ kind: "point", id: key, lng, lat, item: original });
       }
     }
     return items;
@@ -262,13 +356,18 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
         next.set(item.id, existing);
         continue;
       }
-      const el = item.kind === "point" ? buildPointMarker(item.feature) : buildClusterMarker(item.clusterId, item.count);
+      const el =
+        item.kind === "cluster"
+          ? buildClusterMarker(item.clusterId, item.count)
+          : item.item.kind === "spot"
+            ? buildPointMarker(item.item.feature)
+            : buildServiceMarker(item.item.feature);
       next.set(item.id, new Marker({ element: el, anchor: "center" }).setLngLat([item.lng, item.lat]).addTo(map));
     }
     // Artık render listesinde olmayanları kaldır.
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current = next;
-  }, [buildPointMarker, buildClusterMarker, computeRenderedItems]);
+  }, [buildPointMarker, buildServiceMarker, buildClusterMarker, computeRenderedItems]);
 
   const loadSpotsForCurrentView = useCallback(async () => {
     const map = mapRef.current;
@@ -290,13 +389,53 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
       // rozeti bu sayede filtre açılmadan da görünebilir. Backend hiçbir
       // spot'u bu bayrak yüzünden elemez (bkz. spots.py::list_spots_in_viewport).
       const withCompatibility = vehicleCompatibleOnly || (isAuthenticated && hasActiveVehicle);
-      const collection = await fetchSpotsInViewport(
+      const bbox = {
+        min_lng: bounds.getWest(),
+        min_lat: bounds.getSouth(),
+        max_lng: bounds.getEast(),
+        max_lat: bounds.getNorth(),
+      };
+      // Grup şeridi: boş = hepsi. "camping" kamp noktalarını, diğerleri hizmet
+      // gruplarını açar. Kamp özelliği filtreleri (su, elektrik, araç uyumu,
+      // favoriler...) hizmet noktalarına uygulanamaz; biri açıkken hizmet
+      // katmanı gizlenir - "elektrikli yerler" ararken restoran görmeyelim.
+      const isAll = selectedGroups.length === 0;
+      const serviceFilters = selectedGroups.filter((g): g is Exclude<PlaceFilter, "camping"> => g !== "camping");
+      const includeSpots = isAll || selectedGroups.includes("camping");
+      const campFiltersActive =
+        countActiveFilters({
+          hasToilet,
+          hasTrashBins,
+          freeOnly,
+          campingAllowed,
+          overnightAllowed,
+          hasFreshWater,
+          hasElectricity,
+          no4x4Required,
+          caravanOnly,
+          onlyVerified,
+          onlyFavorites,
+          vehicleCompatibleOnly,
+        }) > 0;
+      const includeServices = (isAll || serviceFilters.length > 0) && !campFiltersActive;
+      const serviceParams = isAll ? {} : serviceFilterParams(serviceFilters);
+      // "Yakınımdakiler": merkez modunda (konumum / seçili kamp) hizmetler o merkez +
+      // yarıçaptan gelir ve harita kaydırılsa da değişmez; varsayılan görünür alandır.
+      const servicesPromise: Promise<ServicePointCollection> = !includeServices
+        ? Promise.resolve(EMPTY_SERVICES)
+        : nearbyMode !== "viewport" && nearbyCenter
+          ? fetchNearbyServicePoints(
+              { latitude: nearbyCenter[1], longitude: nearbyCenter[0], radius_m: nearbyRadius, ...serviceParams },
+              controller.signal,
+            )
+          : fetchServicePointsInViewport({ ...bbox, ...serviceParams }, controller.signal);
+      const spotsPromise = !includeSpots
+        ? Promise.resolve({ type: "FeatureCollection" as const, features: [] as SpotFeature[] })
+        : fetchSpotsInViewport(
         {
-          min_lng: bounds.getWest(),
-          min_lat: bounds.getSouth(),
-          max_lng: bounds.getEast(),
-          max_lat: bounds.getNorth(),
-          ...(selectedCategories.length > 0 ? { category: selectedCategories } : {}),
+          ...bbox,
+          // Yalnızca "Kamp" seçiliyse eski (salt okunur) Havuz/Otel kayıtları dışarıda kalır.
+          ...(isAll ? {} : { category: ["CAMPING" as const] }),
           ...filtersToQueryParams({
             hasToilet,
             hasTrashBins,
@@ -314,6 +453,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
         },
         controller.signal,
       );
+      const [collection, services] = await Promise.all([spotsPromise, servicesPromise]);
       // "Sadece Favorilerim": backend'in `/spots`u favori filtresi desteklemiyor,
       // bu yüzden istemci tarafında eleniyor (bkz. spec'teki "opsiyonel" not).
       let features = onlyFavorites
@@ -326,19 +466,44 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
         features = features.filter((f) => f.properties.compatibility?.status !== "not_compatible");
       }
 
-      featuresByIdRef.current = new Map(features.map((f) => [f.properties.id, f]));
-      setMapDataResult(features);
+      const items: MapItem[] = [
+        ...features.map((feature) => ({ kind: "spot" as const, feature })),
+        ...services.features.map((feature) => ({ kind: "service" as const, feature })),
+      ];
+      featuresByIdRef.current = new Map(items.map((item) => [itemKey(item), item]));
+      setMapDataResult(features, services.features, {
+        status: includeServices ? services.external_status : null,
+        attribution: services.attribution,
+      });
+
+      // Hastane/sağlık ocağı hizmet katmanında (tıklanabilir) gösteriliyorsa taban
+      // haritadaki aynı ikonlar gizlenir; görünüm çok genişse yön bulmak için kalır.
+      const healthOnLayer =
+        includeServices &&
+        (isAll || serviceFilters.includes("health")) &&
+        services.external_status !== "too_wide" &&
+        services.external_status !== "disabled";
+      if (mapRef.current) setBasemapHealthVisible(mapRef.current, !healthOnLayer);
+
+      // Bölgenin bir kısmı henüz harici kaynaktan çekilmediyse kısa süre sonra yeniden sor.
+      if (partialTimerRef.current) clearTimeout(partialTimerRef.current);
+      if (services.external_status === "partial" && partialRetriesRef.current < PARTIAL_RETRY_DELAYS_MS.length) {
+        const delay = PARTIAL_RETRY_DELAYS_MS[partialRetriesRef.current];
+        partialRetriesRef.current += 1;
+        partialTimerRef.current = setTimeout(() => useMapDataStore.getState().retry(), delay);
+      } else if (services.external_status !== "partial") {
+        partialRetriesRef.current = 0;
+      }
 
       const map2 = mapRef.current;
       const source = map2?.getSource(SPOTS_SOURCE_ID) as GeoJSONSource | undefined;
       if (source) {
         source.setData({
           type: "FeatureCollection",
-          features: features.map((f) => ({
+          features: items.map((item) => ({
             type: "Feature",
-            id: f.properties.id,
-            geometry: f.geometry,
-            properties: { id: f.properties.id },
+            geometry: item.feature.geometry,
+            properties: { key: itemKey(item) },
           })),
         });
       }
@@ -364,7 +529,10 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     onlyVerified,
     onlyFavorites,
     vehicleCompatibleOnly,
-    selectedCategories,
+    selectedGroups,
+    nearbyMode,
+    nearbyCenter,
+    nearbyRadius,
     favoriteIds,
     isAuthenticated,
     hasActiveVehicle,
@@ -433,12 +601,12 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
       }
       onSelectSpot?.(null);
     });
-    // Sağ tık: picking modunda olmasak bile doğrudan o noktada nokta
-    // ekleme formunu tetikler (oturum yoksa `locationPicked` kendi içinde
-    // giriş modalını açar). Tarayıcının varsayılan sağ-tık menüsünü engelle.
+    // Sağ tık: o noktada ekleme akışını başlatır - konum hazır olduğu için
+    // yalnızca "ne eklemek istiyorsunuz?" sorulur (oturum yoksa giriş modalı
+    // açılır). Tarayıcının varsayılan sağ-tık menüsünü engelle.
     map.on("contextmenu", (event) => {
       event.originalEvent.preventDefault();
-      useCreateSpotStore.getState().locationPicked([event.lngLat.lng, event.lngLat.lat]);
+      useCreateSpotStore.getState().openChooser([event.lngLat.lng, event.lngLat.lat]);
     });
 
     // Panel açılıp kapandığında (veya pencere yeniden boyutlandığında)
@@ -471,7 +639,10 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     map.off("moveend", loadSpotsForCurrentView);
     map.on("moveend", loadSpotsForCurrentView);
 
-    if (map.loaded() && map.getSource(SPOTS_SOURCE_ID)) {
+    // `map.loaded()` tile'lar (ör. arazi gölgesi) yüklenirken false kalır; veri isteği
+    // için yalnızca kendi kaynağımızın kurulmuş olması yeterli - aksi halde filtre
+    // değişikliği bir sonraki pan/zoom'a kadar sessizce uygulanmıyordu.
+    if (map.getSource(SPOTS_SOURCE_ID)) {
       loadSpotsForCurrentView();
     }
 
@@ -499,28 +670,28 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
   // `buildPointMarker`'ın (mount'ta donan closure yerine) her zaman güncel
   // seçimi görebilmesi için ref'i senkron tut.
   useEffect(() => {
-    selectedSpotIdRef.current = selectedSpotId ?? null;
-  }, [selectedSpotId]);
+    selectedSpotIdRef.current = selectedKey;
+  }, [selectedKey]);
 
   // Seçili pin değişince: sadece ilgili marker elementinin sınıfını
   // toggle'la (mat pirinç sarısı çerçeve) - pinleri yeniden çizmeye gerek yok.
   useEffect(() => {
     markersRef.current.forEach((marker, id) => {
-      if (id.startsWith("spot-")) {
-        marker.getElement().classList.toggle("spot-pin--selected", id === `spot-${selectedSpotId}`);
+      if (!id.startsWith("cluster-")) {
+        marker.getElement().classList.toggle("spot-pin--selected", id === selectedKey);
       }
     });
-  }, [selectedSpotId]);
+  }, [selectedKey]);
 
   // Seçili pine yumuşakça ortala - panel artık akışa dahil (overlay değil),
   // bu yüzden haritanın GÖRÜNÜR genişliği zaten paneli hariç tutuyor; eski
   // sol-padding hilesine gerek YOK.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !selectedSpotId) return;
-    const marker = markersRef.current.get(`spot-${selectedSpotId}`);
+    if (!map || !selectedKey) return;
+    const marker = markersRef.current.get(selectedKey);
     if (marker) map.easeTo({ center: marker.getLngLat(), duration: 400 });
-  }, [selectedSpotId]);
+  }, [selectedKey]);
 
   // Konum seçim modu: imleci crosshair'e çevir (MapLibre canvas'ının
   // kendi stilini doğrudan set ediyoruz - drag/hover'da üzerine yazılmasın
@@ -581,6 +752,74 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
     });
   }, [focusedSpot]);
 
+  // "Yakınımdakiler" merkez modu: yarıçap dairesini çiz ve haritayı bir kez ona sığdır.
+  const nearbyCenterMarkerRef = useRef<Marker | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      nearbyCenterMarkerRef.current?.remove();
+      nearbyCenterMarkerRef.current = null;
+      const source = map.getSource(NEARBY_SOURCE_ID) as GeoJSONSource | undefined;
+      if (nearbyMode === "viewport" || !nearbyCenter) {
+        source?.setData({ type: "FeatureCollection", features: [] });
+        return;
+      }
+      const circle = circlePolygon(nearbyCenter, nearbyRadius);
+      if (source) {
+        source.setData(circle);
+      } else {
+        map.addSource(NEARBY_SOURCE_ID, { type: "geojson", data: circle });
+        // Kümeleme motoru katmanının ALTINA - pinler her zaman dairenin üstünde.
+        map.addLayer(
+          { id: "nearby-radius-fill", type: "fill", source: NEARBY_SOURCE_ID, paint: { "fill-color": "#28755c", "fill-opacity": 0.06 } },
+          CLUSTER_ENGINE_LAYER_ID,
+        );
+        map.addLayer(
+          {
+            id: "nearby-radius-line",
+            type: "line",
+            source: NEARBY_SOURCE_ID,
+            paint: { "line-color": "#28755c", "line-width": 1.5, "line-dasharray": [2, 2], "line-opacity": 0.7 },
+          },
+          CLUSTER_ENGINE_LAYER_ID,
+        );
+      }
+      const el = document.createElement("div");
+      el.className = "nearby-center";
+      el.setAttribute("aria-hidden", "true");
+      nearbyCenterMarkerRef.current = new Marker({ element: el, anchor: "center" }).setLngLat(nearbyCenter).addTo(map);
+    };
+    if (map.getLayer(CLUSTER_ENGINE_LAYER_ID)) apply();
+    else map.once("idle", apply);
+    return () => {
+      map.off("idle", apply);
+    };
+  }, [nearbyMode, nearbyCenter, nearbyRadius]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const { mode, center, radiusM } = useNearbyStore.getState();
+    if (!map || mode === "viewport" || !center || nearbyFitToken === 0) return;
+    const ring = circlePolygon(center, radiusM).geometry.coordinates[0];
+    const lngs = ring.map((c) => c[0]);
+    const lats = ring.map((c) => c[1]);
+    map.fitBounds(
+      [
+        [Math.min(...lngs), Math.min(...lats)],
+        [Math.max(...lngs), Math.max(...lats)],
+      ],
+      { padding: 40, duration: 700 },
+    );
+  }, [nearbyFitToken]);
+
+  // Yeni hizmet noktası: oraya uç; `moveend` yeni noktayı da içeren görünümü yeniden sorgular.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focusedServicePoint) return;
+    map.flyTo({ center: focusedServicePoint.geometry.coordinates, zoom: Math.max(map.getZoom(), 15), duration: 800 });
+  }, [focusedServicePoint]);
+
   // Bir spot silinince: bir sonraki pan/zoom'u (moveend) beklemeden pinini
   // haritadan hemen kaldır.
   useEffect(() => {
@@ -590,7 +829,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
       marker.remove();
       markersRef.current.delete(`spot-${deletedSpotId}`);
     }
-    featuresByIdRef.current.delete(deletedSpotId);
+    featuresByIdRef.current.delete(`spot-${deletedSpotId}`);
     lastSignatureRef.current = ""; // bir sonraki render'da yeniden kur
   }, [deletedSpotId]);
 
@@ -600,7 +839,7 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
   useEffect(() => {
     if (!updatedSpot) return;
     const id = updatedSpot.properties.id;
-    featuresByIdRef.current.set(id, updatedSpot);
+    featuresByIdRef.current.set(`spot-${id}`, { kind: "spot", feature: updatedSpot });
     const marker = markersRef.current.get(`spot-${id}`);
     if (!marker) return;
     const el = marker.getElement();
@@ -636,27 +875,11 @@ export default function MapView({ onSelectSpot, selectedSpotId }: Props) {
   );
 }
 
-/** "+ Nokta Ekle" (birincil eylem) + konum seçim dropdown'u - haritanın kendi kutusunun sol üstü. */
+/** "+ Nokta Ekle" (birincil eylem) - önce tür seçimi (AddPlaceChooser), sonra konum. */
 function MapFloatingControls() {
   const isPickingLocation = useCreateSpotStore((s) => s.isPickingLocation);
-  const startPicking = useCreateSpotStore((s) => s.startPicking);
+  const openChooser = useCreateSpotStore((s) => s.openChooser);
   const cancelPicking = useCreateSpotStore((s) => s.cancelPicking);
-  const isLocating = useCreateSpotStore((s) => s.isLocating);
-  const locateCurrentPosition = useCreateSpotStore((s) => s.useCurrentLocation);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Dropdown dışına tıklanınca kapat.
-  useEffect(() => {
-    if (!showDropdown) return;
-    function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowDropdown(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [showDropdown]);
 
   if (isPickingLocation) {
     return (
@@ -676,63 +899,23 @@ function MapFloatingControls() {
   }
 
   return (
-    <div className="pointer-events-none absolute left-3 top-[60px] z-10 sm:left-4" ref={dropdownRef}>
+    <div className="pointer-events-none absolute left-3 top-[60px] z-10 sm:left-4">
       <button
         type="button"
-        onClick={() => setShowDropdown((prev) => !prev)}
+        onClick={() => openChooser()}
         data-testid="add-spot-button"
         className="pointer-events-auto flex min-h-touch items-center gap-1.5 rounded-full bg-accent-green px-5 text-sm font-semibold text-text-on-dark shadow-float transition-colors hover:bg-accent-green-hover"
       >
         <Plus size={17} />
         Nokta Ekle
-        <ChevronDown size={14} className={`ml-0.5 transition-transform ${showDropdown ? "rotate-180" : ""}`} />
       </button>
-
-      {showDropdown && (
-        <div className="pointer-events-auto mt-2 min-w-[220px] overflow-hidden rounded-xl border border-border-light bg-surface-primary shadow-float">
-          <button
-            type="button"
-            onClick={() => {
-              setShowDropdown(false);
-              startPicking();
-            }}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-text-primary transition-colors hover:bg-surface-secondary"
-          >
-            <MapPinned size={18} className="shrink-0 text-accent-green" />
-            <div>
-              <span className="block">Haritadan Seç</span>
-              <span className="block text-xs font-normal text-text-secondary">Harita üzerinde bir konum seçin</span>
-            </div>
-          </button>
-          <div className="mx-3 border-t border-border-light" />
-          <button
-            type="button"
-            disabled={isLocating}
-            onClick={() => {
-              setShowDropdown(false);
-              locateCurrentPosition();
-            }}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
-          >
-            {isLocating ? (
-              <Loader2 size={18} className="shrink-0 animate-spin text-accent-green" />
-            ) : (
-              <Navigation size={18} className="shrink-0 text-accent-green" />
-            )}
-            <div>
-              <span className="block">{isLocating ? "Konum alınıyor…" : "Konumumu Kullan"}</span>
-              <span className="block text-xs font-normal text-text-secondary">GPS ile mevcut konumunuz</span>
-            </div>
-          </button>
-        </div>
-      )}
     </div>
   );
 }
 
 /** Görünen bölgedeki nokta sayısı - okunaklı bir harita durum rozeti (eski "52 NOKTA" mono kutusunun yerine). */
 function MapStatusBadge() {
-  const count = useMapDataStore((s) => s.features.length);
+  const count = useMapDataStore((s) => s.features.length + s.servicePoints.length);
   const isLoading = useMapDataStore((s) => s.isLoading);
 
   return (

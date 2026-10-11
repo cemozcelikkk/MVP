@@ -1,5 +1,8 @@
 /**
- * Yeni spot ekleme formu - haritada bir konum seçildiğinde açılan modal.
+ * Kamp / Karavan Alanı ekleme formu - "Ne eklemek istiyorsunuz?" adımında
+ * (bkz. AddPlaceFlow) kamp seçilip konum belirlendiğinde açılan detaylı modal.
+ * Restoran, sağlık, WC ve duş bu formda YOK: onlar ayrı, kısa bir akışla
+ * `/service-points`e eklenir.
  * `useCreateSpotStore.pendingCoordinates` dolu olduğu sürece açık kalır;
  * `key`'i koordinatlara bağlı olan `CreateSpotForm` her yeni konum
  * seçiminde temiz bir form state'iyle yeniden mount edilir.
@@ -17,7 +20,6 @@ import {
   uploadSpotPhotos,
   type ClearanceRequired,
   type RoadType,
-  type SpotCategory,
   type SpotFeature,
 } from "../lib/api";
 import { EMPTY_TRAVEL_INFO, type SpotTravelInfo } from "../lib/api";
@@ -28,15 +30,6 @@ import { Field, INPUT_CLASS, SegmentedGroup, ToggleField } from "./FormControls"
 import Button from "./ui/Button";
 import Modal from "./ui/Modal";
 import { Section } from "./ui/Section";
-
-const CATEGORY_OPTIONS: { value: SpotCategory; label: string }[] = [
-  { value: "CAMPING", label: "Kamp / Karavan Alanı" },
-  { value: "FISH_RESTAURANT", label: "Balık Restoranı" },
-  { value: "MEAT_RESTAURANT", label: "Et Restoranı" },
-  { value: "HOTEL_POOL", label: "Otel / Havuz" },
-  { value: "HOSPITAL", label: "Hastane" },
-  { value: "HEALTH_CENTER", label: "Sağlık Ocağı" },
-];
 
 const ROAD_TYPE_OPTIONS: { value: RoadType; label: string }[] = [
   { value: "asphalt", label: "Asfalt" },
@@ -71,8 +64,9 @@ export default function CreateSpotModal({ onCreated }: Props) {
   const pendingCoordinates = useCreateSpotStore((s) => s.pendingCoordinates);
   const closeModal = useCreateSpotStore((s) => s.closeModal);
   const focusSpot = useCreateSpotStore((s) => s.focusSpot);
+  const addGroup = useCreateSpotStore((s) => s.addGroup);
 
-  if (!isModalOpen || !pendingCoordinates) return null;
+  if (!isModalOpen || !pendingCoordinates || addGroup !== "camping") return null;
 
   return (
     <CreateSpotForm
@@ -100,7 +94,6 @@ function CreateSpotForm({
   const [longitude, latitude] = coordinates;
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<SpotCategory>("CAMPING");
   const [roadType, setRoadType] = useState<RoadType>("asphalt");
   const [maxVehicleLength, setMaxVehicleLength] = useState("");
   const [isUnlimitedLength, setIsUnlimitedLength] = useState(true);
@@ -178,7 +171,7 @@ function CreateSpotForm({
         ...travelInfo,
         title,
         description: description.trim() || null,
-        category,
+        category: "CAMPING",
         coordinates: { latitude, longitude },
         passability: {
           road_type: roadType,
@@ -230,7 +223,7 @@ function CreateSpotForm({
 
   return (
     <Modal
-      title="Yeni Nokta Ekle"
+      title="Kamp / Karavan Alanı Ekle"
       onClose={onClose}
       maxWidth="xl"
       testId="create-spot-modal"
@@ -276,9 +269,6 @@ function CreateSpotForm({
                 onChange={(event) => setDescription(event.target.value)}
                 className={`${INPUT_CLASS} resize-none`}
               />
-            </Field>
-            <Field label="Kategori">
-              <SegmentedGroup options={CATEGORY_OPTIONS} value={category} onChange={setCategory} />
             </Field>
           </div>
         </Section>
