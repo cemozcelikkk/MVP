@@ -22,7 +22,7 @@ import { Section } from "./ui/Section";
 
 const RADIUS_M = 10_000;
 // Harici kaynak çevreyi arka planda çekerken ("partial") artan aralıklarla yeniden sorulur.
-const RETRY_DELAYS_MS = [1500, 3000, 5000, 8000];
+const RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000];
 const PER_CATEGORY = 2;
 
 interface Props {

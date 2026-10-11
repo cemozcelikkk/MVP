@@ -83,7 +83,7 @@ const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.
 const SPOTS_SOURCE_ID = "spots";
 const NEARBY_SOURCE_ID = "nearby-radius";
 // Harici kaynak bölgeyi arka planda çekerken ("partial") artan aralıklarla yeniden sorulur.
-const PARTIAL_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000];
+const PARTIAL_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000];
 
 /** Merkez + yarıçaptan (metre) 64 köşeli daire poligonu - "Yakınımdakiler" alanı. */
 interface CircleFeature {
@@ -123,11 +123,13 @@ const MAX_ZOOM = 18;
 // kümelenir; 16+ sokak ölçeğinde her işaretçi ayrı görünür.
 const CLUSTER_MAX_ZOOM = 15;
 const CLUSTER_RADIUS = 56;
-// Harita bu kutunun dışına sürüklenemez/kaydırılamaz - Türkiye + kıyı
-// sularını (Ege/Akdeniz güneybatı, Karadeniz/Doğu kuzeydoğu) kapsar.
+// Harita bu kutunun dışına sürüklenemez/kaydırılamaz. Türkiye sınırına her yönde
+// ~150-200 km pay bırakılır: dar (telefon) ekranda sınır bölgeleri (Hatay, Edirne,
+// Kars, Hakkari, Akdeniz kıyısı) ekranın kenarına/alt kontrollerin altına sıkışmadan
+// ortalanabilsin ve rahatça nokta eklenebilsin.
 const TURKEY_BOUNDS: [[number, number], [number, number]] = [
-  [25.5, 35.5], // Güneybatı
-  [45.0, 42.5], // Kuzeydoğu
+  [24.0, 34.0], // Güneybatı
+  [46.5, 43.5], // Kuzeydoğu
 ];
 
 interface Props {

@@ -3,11 +3,12 @@ Harici hizmet noktası kaynağı: OpenStreetMap.
 
 İki OSM kaynağı birlikte kullanılır, ikisi de `service_points`'ten AYRI tutulur:
 
-1. **Sağlık** (hastane / sağlık ocağı): `basemap_pois` - zaten haftalık,
-   Türkiye geneli içe aktarılan tablo (scripts/import_basemap_pois.py). Canlı
-   Overpass çağrısı gerektirmez; düşük zoom'da da gösterilebilir.
-2. **Yeme & İçme, WC, duş**: istek anında, yalnızca bakılan bölge için
-   Overpass'tan **hücre (tile)** bazında çekilip `osm_pois`'te TTL'li tutulur.
+1. **Hücre önbelleği** (`osm_pois`): Yeme & İçme, WC, duş VE sağlık - istek anında,
+   yalnızca bakılan bölge için Overpass'tan **hücre (tile)** bazında çekilip TTL'li tutulur.
+2. **Sağlık için ek kaynak** (`basemap_pois`): haftalık, Türkiye geneli içe aktarılan
+   tablo (scripts/import_basemap_pois.py). Doluysa hücre çekilmemiş bölgelerde de sağlık
+   noktaları hemen görünür; BOŞ olsa da (ör. yeni kurulan production) sağlık noktaları
+   hücre önbelleğinden gelir. İki kaynaktaki aynı OSM nesnesi osm_id ile tekilleştirilir.
 
 Overpass kullanım politikasına uyum (https://dev.overpass-api.de/overpass-doc/en/preface/commons.html):
 - Her hücre TTL boyunca (varsayılan 7 gün) bir kez çekilir; aynı bölge için
@@ -56,8 +57,8 @@ FOOD_CATEGORIES = frozenset(
 )
 BASIC_CATEGORIES = frozenset({ServicePointCategory.WC, ServicePointCategory.SHOWER})
 HEALTH_CATEGORIES = frozenset({ServicePointCategory.HOSPITAL, ServicePointCategory.HEALTH_CENTER})
-# Overpass hücrelerinden gelen kategoriler (sağlık basemap_pois'ten gelir).
-TILE_CATEGORIES = FOOD_CATEGORIES | BASIC_CATEGORIES
+# Overpass hücrelerinden gelen kategoriler (sağlık ayrıca basemap_pois'ten de gelebilir).
+TILE_CATEGORIES = FOOD_CATEGORIES | BASIC_CATEGORIES | HEALTH_CATEGORIES
 PRIVATE_ACCESS = ("private", "no", "customers")
 MAX_TAG_VALUE_LENGTH = 300
 
@@ -175,7 +176,7 @@ class OverpassError(Exception):
 
 
 def build_tile_query(bbox: tuple[float, float, float, float], timeout_s: int) -> str:
-    """Yeme & içme + WC/duş için bbox sorgusu. `bbox` = (güney, batı, kuzey, doğu)."""
+    """Yeme & içme + sağlık + WC/duş için bbox sorgusu. `bbox` = (güney, batı, kuzey, doğu)."""
     s, w, n, e = bbox
     area = f"({s:.5f},{w:.5f},{n:.5f},{e:.5f})"
     private = "|".join(PRIVATE_ACCESS)
@@ -183,6 +184,7 @@ def build_tile_query(bbox: tuple[float, float, float, float], timeout_s: int) ->
 [out:json][timeout:{timeout_s}];
 (
   nwr["amenity"~"^(restaurant|fast_food|cafe)$"]["name"]{area};
+  nwr["amenity"~"^(hospital|clinic|doctors)$"]{area};
   nwr["amenity"~"^(toilets|shower)$"]["access"!~"^({private})$"]{area};
 );
 out center tags;

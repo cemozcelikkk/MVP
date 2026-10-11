@@ -57,7 +57,7 @@ Yeni uçlar (`/api/v1`):
 
 ## OpenStreetMap verisi
 
-- Sağlık: haftalık içe aktarılan `basemap_pois` (canlı istek yok). Yeme & İçme, WC, duş: bakılan bölge için 0.05° hücrelerle Overpass'tan, arka planda çekilir; harita isteği beklemez.
+- Yeme & İçme, sağlık, WC, duş: bakılan bölge için 0.05° hücrelerle Overpass'tan, arka planda çekilir; harita isteği beklemez (ilk yüklemede yanıt `partial`, istemci ~50 sn boyunca artan aralıklarla yeniden sorar). Sağlık ayrıca haftalık `basemap_pois` içe aktarımından da gelir (doluysa hücre çekilmemiş bölgelerde de görünür; boş olsa da sağlık çalışır).
 - Kullanım politikası: hücre başına 7 günde bir istek, sunucu genelinde dakikada 6 istek, süreç içinde tek eşzamanlı istek, hata sonrası 15 dk bekleme, `OVERPASS_USER_AGENT` ile tanıtım. Yanıtlarda ve detayda "© OpenStreetMap katkıcıları (ODbL)" atfı.
 - OSM verisi doğrulanmış/açık gibi sunulmaz ("harita verisi" etiketi, kullanılabilirlik bilgisi OSM'den alınmaz). Bir kullanıcı puan/durum/teyit/bildirim verdiğinde nokta aynı id ile `service_points`'e bağlanır.
 - Mükerrer önleme: OSM kimliği; aynı kategori ailesi + 40 m + ad benzerliği.
@@ -70,3 +70,17 @@ HTTP katmanındaki IP başına sınıra ek olarak hesap başına: günde 30 nokt
 ## Üretim ayarları
 
 `OVERPASS_USER_AGENT` gerçek uygulama adı + iletişim adresi olmalı. İlgili diğer ayarlar `backend/app/core/config.py` içinde `OSM_*`, `OVERPASS_*`, `SERVICE_POINT_QUOTAS_ENABLED`.
+
+## Production teşhisi ve sorun giderme
+
+Sunucuda, API konteynerinin içinden (Cloudflare devre dışı) zinciri tek komutla kontrol edin:
+
+```bash
+docker compose --env-file deploy/.env.production -f deploy/compose.production.yml exec -T api python - < deploy/check-nearby.py
+```
+
+Migration sürümü, sağlık verisi, OSM önbelleği, sunucudan Overpass'a çıkış ve gerçek "yakınımdakiler" yanıtını gösterir; sonunda yapılması gerekenleri listeler.
+
+- **Gerçek istemci IP'si:** Caddy, Cloudflare (ve özel ağdaki bir proxy) arkasında `CF-Connecting-IP`'yi güvenilir kabul eder (`frontend/deploy/Caddyfile`). Bu olmadan tüm kullanıcılar aynı Cloudflare IP'sini paylaşır ve IP başına istek sınırı (dakikada 180 okuma) herkes için ortak dolar → 429.
+- **Cloudflare güvenlik ayarları:** "I'm Under Attack" modu veya `/api/*` yollarına uygulanan challenge/Bot Fight Mode, tarayıcının arka plan isteklerine (fetch) 403 HTML döndürür. Cloudflare → Security → Events'te `/api/v1/service-points` engelleniyor mu bakın.
+- **Bakım betikleri** production imajında: `python -m scripts.import_basemap_pois` (Türkiye geneli sağlık/akaryakıt/eczane, uzun sürer), `python -m scripts.category_migration_report`, `python -m scripts.fetch_osm_places --lat .. --lng .. --radius ..`.

@@ -17,6 +17,9 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.p
 COPY --chown=app:app app ./app
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app alembic.ini .
+# Bakım betikleri (OSM sağlık verisi içe aktarımı, kategori geçişi raporu, OSM önbellek ısıtma)
+# production'da `docker compose exec api python -m scripts.<ad>` ile çalıştırılabilsin.
+COPY --chown=app:app scripts ./scripts
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \

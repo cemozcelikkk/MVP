@@ -161,7 +161,8 @@ async def test_wide_view_skips_external_and_disabled_flag(api_client, osm_enable
     assert wide.json()["external_status"] == "too_wide"
     assert osm_enabled.calls == []
     health_only = await api_client.get(URL, params={**CELL, "group": "health"})
-    assert health_only.json()["external_status"] == "not_needed"
+    # Sağlık da hücre önbelleğinden gelir (basemap_pois boş olsa bile çalışsın diye).
+    assert health_only.json()["external_status"] == "ok"
     monkeypatch.setattr(settings, "OSM_EXTERNAL_ENABLED", False)
     assert (await api_client.get(URL, params=CELL)).json()["external_status"] == "disabled"
 
@@ -274,8 +275,7 @@ async def test_health_comes_from_basemap_pois_and_nearby_is_sorted(api_client, o
         assert [p["osm_id"] for p in props] == [f"node/{NODE_BASE + 10}", f"node/{NODE_BASE + 11}"]
         assert props[0]["distance_m"] < props[1]["distance_m"] <= 3000
         assert props[1]["category"] == "HEALTH_CENTER" and props[1]["name"] is None
-        assert osm_enabled.calls == []  # sağlık için Overpass'a gidilmez
-        assert response.json()["external_status"] == "not_needed"
+        assert response.json()["external_status"] == "ok"
     finally:
         await db_session.execute(delete(BasemapPoi).where(BasemapPoi.id.in_([near.id, far.id])))
         await db_session.commit()
@@ -321,7 +321,7 @@ async def test_nearby_wide_radius_keeps_health_and_returns_nearest_first(api_cli
             f"{URL}/nearby", params={"latitude": 0.32, "longitude": 0.32, "radius_m": 10_000, "group": "health", "limit": 3}
         )
         body = response.json()
-        assert body["external_status"] == "not_needed"
+        assert body["external_status"] == "ok"
         assert [f["properties"]["name"] for f in body["features"]] == ["Test H0", "Test H1", "Test H2"]
         wide_view = await api_client.get(URL, params={"min_lat": 0.23, "max_lat": 0.41, "min_lng": 0.23, "max_lng": 0.41})
         assert wide_view.json()["external_status"] == "too_wide"
@@ -340,3 +340,27 @@ async def test_duplicates_inside_osm_are_merged_but_distinct_unnamed_points_are_
     features = (await api_client.get(URL, params=CELL)).json()["features"]
     names = sorted((f["properties"]["category"], f["properties"]["name"] or "") for f in features)
     assert names == [("OTHER_RESTAURANT", "Giant Stride"), ("WC", ""), ("WC", "")]
+
+
+async def test_health_works_from_tiles_when_basemap_is_empty_and_is_not_duplicated(api_client, osm_enabled, db_session):
+    """Yeni kurulan production'da basemap_pois boştur: sağlık noktaları yine de hücre
+    önbelleğinden gelmeli; aynı hastane iki kaynakta da varsa tek nokta görünmeli."""
+    osm_enabled.elements = [
+        _node(40, 0.3210, 0.3200, amenity="hospital", name="Tile Devlet Hastanesi"),
+        _node(41, 0.3300, 0.3300, amenity="clinic"),
+    ]
+    body = (await api_client.get(f"{URL}/nearby", params={"latitude": 0.32, "longitude": 0.32, "radius_m": 3000, "group": "health"})).json()
+    assert sorted(f["properties"]["osm_id"] for f in body["features"]) == [f"node/{NODE_BASE + 40}", f"node/{NODE_BASE + 41}"]
+
+    # Aynı OSM nesnesi basemap_pois'e de girilmiş olsun -> yine tek nokta.
+    twin = BasemapPoi(osm_id=f"node/{NODE_BASE + 40}", category="hospital", name="Tile Devlet Hastanesi",
+                      coordinates=lonlat_to_wkb(0.32, 0.321))
+    db_session.add(twin)
+    await db_session.commit()
+    try:
+        body = (await api_client.get(f"{URL}/nearby", params={"latitude": 0.32, "longitude": 0.32, "radius_m": 3000, "group": "health"})).json()
+        ids = [f["properties"]["osm_id"] for f in body["features"]]
+        assert ids.count(f"node/{NODE_BASE + 40}") == 1 and len(ids) == 2
+    finally:
+        await db_session.execute(delete(BasemapPoi).where(BasemapPoi.id == twin.id))
+        await db_session.commit()
