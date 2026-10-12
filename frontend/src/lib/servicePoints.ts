@@ -137,3 +137,22 @@ export const REPORT_REASON_LABEL: Record<ServicePointReportReason, string> = {
 
 /** WC/duş bilgisi bu kadar günden eskiyse "güncelliğini yitirmiş olabilir" uyarısı gösterilir. */
 export const STATUS_STALE_DAYS = 30;
+
+/**
+ * Harici kaynak (OpenStreetMap) henüz hazır değilken yeniden sorma takvimi.
+ * - `partial`: bölge arka planda çekiliyor - önce hızlı (1,5 sn → 20 sn), sonra 30 sn arayla.
+ * - `unavailable`: kamu Overpass sunucuları şu an yanıt vermiyor; sunucudaki yenileyici
+ *   1, 2, 4 ... dk arayla kendisi deniyor - istemci 30 sn arayla sonucu kontrol eder.
+ * Toplam ~5 dakika sonra durur (sekme açık unutulsa da sonsuza kadar sormaz). Başka bir
+ * durumda `null` - yeniden sorulmaz.
+ */
+const FAST_RETRY_MS = [1500, 3000, 5000, 8000, 12000, 20000];
+const SLOW_RETRY_MS = 30_000;
+const MAX_EXTERNAL_RETRIES = 14;
+
+export function externalRetryDelay(status: string | null | undefined, attempt: number): number | null {
+  if (attempt >= MAX_EXTERNAL_RETRIES) return null;
+  if (status === "partial") return FAST_RETRY_MS[attempt] ?? SLOW_RETRY_MS;
+  if (status === "unavailable") return SLOW_RETRY_MS;
+  return null;
+}

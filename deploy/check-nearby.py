@@ -20,6 +20,7 @@ import app.models  # noqa: F401
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 
+EXPECTED_REVISION = "c6e2a8d4f0b3"
 LAT = float(os.environ.get("NEARBY_LAT", "36.2005"))
 LNG = float(os.environ.get("NEARBY_LNG", "29.6395"))
 problems: list[str] = []
@@ -54,8 +55,8 @@ async def main() -> None:
         print("\n== Veritabanı")
         version = await scalar(db, "SELECT version_num FROM alembic_version")
         line("alembic sürümü", version)
-        if version != "a4c8e2f6b1d9":
-            problems.append(f"Migration güncel değil ({version}); beklenen a4c8e2f6b1d9 - yeni sürüm deploy edilmemiş.")
+        if version != EXPECTED_REVISION:
+            problems.append(f"Migration güncel değil ({version}); beklenen {EXPECTED_REVISION} - yeni sürüm deploy edilmemiş.")
         sp = await scalar(db, "SELECT count(*) FROM service_points WHERE deleted_at IS NULL")
         line("service_points (aktif)", sp)
         health = await scalar(db, "SELECT count(*) FROM basemap_pois WHERE category IN ('hospital','clinic')")
@@ -65,22 +66,59 @@ async def main() -> None:
         line("osm_pois (önbellek)", await scalar(db, "SELECT count(*) FROM osm_pois"))
         tiles_ok = await scalar(db, "SELECT count(*) FROM osm_tiles WHERE status='ok'")
         tiles_failed = await scalar(db, "SELECT count(*) FROM osm_tiles WHERE status='failed'")
-        line("osm_tiles ok / failed", f"{tiles_ok} / {tiles_failed}")
+        tiles_pending = await scalar(db, "SELECT count(*) FROM osm_tiles WHERE status='pending'")
+        line("osm_tiles ok / failed / pending", f"{tiles_ok} / {tiles_failed} / {tiles_pending}")
+        near = await scalar(
+            db,
+            "SELECT count(*) FROM osm_pois WHERE ST_DWithin(coordinates::geography, "
+            "ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography, 5000)",
+            lng=LNG, lat=LAT,
+        )
+        line("önbellekte test noktasına 5 km içinde", near)
+
+        print(f"\n== Test noktasının hücreleri ({LAT}, {LNG}, 5 km)")
+        from app.services.osm_source import tile_key, tiles_for_bbox
+
+        keys = [tile_key(*c) for c in tiles_for_bbox(LNG - 0.056, LAT - 0.045, LNG + 0.056, LAT + 0.045)]
+        rows = (
+            await db.execute(
+                text("SELECT key, status, attempts, retry_after FROM osm_tiles WHERE key = ANY(:k)"), {"k": keys}
+            )
+        ).all()
+        known = {r.key: r for r in rows}
+        summary: dict[str, int] = {}
+        for key in keys:
+            state = known[key].status if key in known else "hiç istenmemiş"
+            summary[state] = summary.get(state, 0) + 1
+        line("hücre durumları", summary)
+        failed = [r for r in rows if r.status == "failed" and r.retry_after]
+        if failed:
+            line("başarısız hücrede en çok deneme", max(r.attempts for r in failed))
+            line("sıradaki otomatik deneme", min(r.retry_after for r in failed).isoformat(timespec="seconds"))
         line("inceleme bekleyen eski kayıt", await scalar(
             db, "SELECT count(*) FROM spots WHERE deleted_at IS NULL AND extra_amenities->>'category_review'='pending'"))
 
-    print("\n== Overpass'a çıkış (tek küçük sorgu)")
-    from app.services.osm_source import build_tile_query, fetch_overpass_with_fallback
+    print("\n== Overpass sunucuları (her biri TEK deneme, küçük sorgu)")
+    from app.services.osm_source import build_tile_query, fetch_overpass, fetch_overpass_with_fallback
 
+    query = build_tile_query((LAT - 0.005, LNG - 0.005, LAT + 0.005, LNG + 0.005), 15)
+    for url in [settings.OVERPASS_URL, *settings.OVERPASS_FALLBACK_URLS]:
+        started = time.monotonic()
+        try:
+            elements = await asyncio.to_thread(fetch_overpass, query, url)
+            line(url.split("/")[2], f"OK - {len(elements)} nesne, {time.monotonic() - started:.1f} sn")
+        except Exception as exc:
+            line(url.split("/")[2], f"hata - {exc} ({time.monotonic() - started:.1f} sn)")
     started = time.monotonic()
     try:
-        elements = await asyncio.to_thread(
-            fetch_overpass_with_fallback, build_tile_query((LAT - 0.005, LNG - 0.005, LAT + 0.005, LNG + 0.005), 15)
-        )
-        line("sonuç", f"OK - {len(elements)} nesne, {time.monotonic() - started:.1f} sn")
+        elements = await asyncio.to_thread(fetch_overpass_with_fallback, query)
+        line("uygulamanın tekrar denemeli çağrısı", f"OK - {len(elements)} nesne, {time.monotonic() - started:.1f} sn")
     except Exception as exc:
-        line("sonuç", f"BAŞARISIZ - {exc} ({time.monotonic() - started:.1f} sn)")
-        problems.append("Sunucudan Overpass'a erişilemiyor/meşgul - restoran/WC/duş harici verisi gelmez (KaravanTR kayıtları çalışır).")
+        line("uygulamanın tekrar denemeli çağrısı", f"BAŞARISIZ - {exc} ({time.monotonic() - started:.1f} sn)")
+        problems.append(
+            "Overpass'ın tüm sunucuları şu an yanıt vermiyor (kamu servisi). Başarısız hücreler arka plan "
+            "yenileyicisiyle 1-30 dk arayla kendiliğinden tekrar denenir; KaravanTR kayıtları ve önbellek çalışır."
+        )
 
     print(f"\n== Servis katmanı: yakınımdakiler ({LAT}, {LNG}, 5 km)")
     from app.services.service_point_service import list_nearby

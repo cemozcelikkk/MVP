@@ -3,10 +3,11 @@ hata/geri çekilme, KaravanTR kayıtlarıyla birleştirme ve katkıda somutlaşm
 
 Gerçek Overpass'a HİÇ gidilmez: `osm_enabled` fixture'ı sahte bir kaynak kurar."""
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.core.config import settings
 from app.models.basemap_poi import BasemapPoi
@@ -49,6 +50,9 @@ async def osm_enabled(monkeypatch, db_session):
     fake = FakeOverpass()
     monkeypatch.setattr(settings, "OSM_EXTERNAL_ENABLED", True)
     monkeypatch.setattr(settings, "OSM_FETCH_IN_BACKGROUND", False)  # deterministik: aynı istekte çek
+    # Testlere özel hücre ızgarası: aynı veritabanını kullanan çalışan geliştirme API'sinin
+    # arka plan yenileyicisi (0.05° anahtarları) test hücrelerine dokunmasın.
+    monkeypatch.setattr(settings, "OSM_TILE_DEGREES", 0.0501)
     monkeypatch.setattr(osm_source, "fetch_overpass_with_fallback", lambda q: fake(q))
 
     async def allow():
@@ -58,7 +62,8 @@ async def osm_enabled(monkeypatch, db_session):
     yield fake
     prefix = f"{settings.OSM_TILE_DEGREES}:"
     await db_session.execute(delete(OsmPoi).where(OsmPoi.osm_id.like(f"node/{str(NODE_BASE)[:3]}%")))
-    await db_session.execute(delete(OsmTile).where(OsmTile.key.in_([f"{prefix}6:6", f"{prefix}7:6", f"{prefix}6:7"])))
+    await db_session.execute(delete(OsmPoi).where(OsmPoi.tile_key.like(f"{prefix}%")))
+    await db_session.execute(delete(OsmTile).where(OsmTile.key.like(f"{prefix}%")))
     await db_session.execute(delete(ServicePoint).where(ServicePoint.osm_id.like(f"node/{str(NODE_BASE)[:3]}%")))
     await db_session.commit()
 
@@ -364,3 +369,145 @@ async def test_health_works_from_tiles_when_basemap_is_empty_and_is_not_duplicat
     finally:
         await db_session.execute(delete(BasemapPoi).where(BasemapPoi.id == twin.id))
         await db_session.commit()
+
+
+# --- Geçici Overpass hataları: sunucular arası tekrar, üstel bekleme, arka plan yenileyici ---
+
+
+def _http_error(code: int):
+    return osm_source.OverpassError(f"Overpass HTTP {code}", retryable=code in osm_source.RETRYABLE_HTTP)
+
+
+def test_transient_errors_rotate_across_endpoints_and_cool_down_failed_ones(monkeypatch):
+    monkeypatch.setattr(settings, "OVERPASS_URL", "https://a.test/api")
+    monkeypatch.setattr(settings, "OVERPASS_FALLBACK_URLS", ["https://b.test/api", "https://c.test/api"])
+    monkeypatch.setattr(osm_source, "_ENDPOINT_COOLDOWN", {})
+    calls = []
+
+    def fake(query, url=None, timeout_s=None):
+        calls.append(url)
+        if url == "https://a.test/api":
+            raise _http_error(504)
+        if url == "https://b.test/api":
+            raise _http_error(500)  # 500 de geçici sayılır (kamu sunucularında anlık)
+        return [{"ok": True}]
+
+    monkeypatch.setattr(osm_source, "fetch_overpass", fake)
+    assert osm_source.fetch_overpass_with_fallback("q", sleep=lambda s: None) == [{"ok": True}]
+    assert calls == ["https://a.test/api", "https://b.test/api", "https://c.test/api"]
+    # Hata veren sunucular bir süre sıranın sonunda: sıradaki istek doğrudan sağlıklı olanla başlar.
+    assert osm_source.overpass_endpoints()[0] == "https://c.test/api"
+
+
+def test_second_round_after_pause_and_query_errors_stop_immediately(monkeypatch):
+    monkeypatch.setattr(settings, "OVERPASS_URL", "https://a.test/api")
+    monkeypatch.setattr(settings, "OVERPASS_FALLBACK_URLS", ["https://b.test/api"])
+    monkeypatch.setattr(settings, "OVERPASS_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(osm_source, "_ENDPOINT_COOLDOWN", {})
+    attempts, pauses = [], []
+
+    def flaky(query, url=None, timeout_s=None):
+        attempts.append(url)
+        if len(attempts) < 3:
+            raise _http_error(504)
+        return []
+
+    monkeypatch.setattr(osm_source, "fetch_overpass", flaky)
+    assert osm_source.fetch_overpass_with_fallback("q", sleep=pauses.append) == []
+    assert len(attempts) == 3 and pauses == [settings.OVERPASS_RETRY_PAUSE_SECONDS]
+
+    attempts.clear()
+
+    def bad_query(query, url=None, timeout_s=None):
+        attempts.append(url)
+        raise _http_error(400)
+
+    monkeypatch.setattr(osm_source, "fetch_overpass", bad_query)
+    with pytest.raises(osm_source.OverpassError):
+        osm_source.fetch_overpass_with_fallback("q", sleep=lambda s: None)
+    assert len(attempts) == 1
+
+
+async def test_failed_tiles_back_off_exponentially_and_keep_cached_data(osm_enabled, db_session):
+    osm_enabled.elements = [_node(50, 0.32, 0.32, amenity="shower")]
+    assert await osm_source.ensure_tiles(db_session, min_lon=0.301, min_lat=0.301, max_lon=0.349, max_lat=0.349) is ExternalStatus.OK
+    key = osm_source.tile_key(6, 6)
+    tile = await db_session.get(OsmTile, key)
+    tile.fetched_at = tile.fetched_at.replace(year=2000)  # TTL dolmuş - tazelenmeli
+    await db_session.commit()
+
+    osm_enabled.fail = True
+    for expected_attempts, expected_wait in ((1, 60), (2, 120)):
+        tile = await db_session.get(OsmTile, key)
+        tile.retry_after = None if tile.status != "failed" else tile.retry_after.replace(year=2000)
+        await db_session.commit()
+        status = await osm_source.ensure_tiles(db_session, min_lon=0.301, min_lat=0.301, max_lon=0.349, max_lat=0.349)
+        assert status is ExternalStatus.UNAVAILABLE
+        await db_session.refresh(tile)
+        assert tile.status == "failed" and tile.attempts == expected_attempts
+        wait = (tile.retry_after - datetime.now(UTC)).total_seconds()
+        assert expected_wait - 10 < wait <= expected_wait + 1
+    # Tazeleme başarısız olsa da eski veri gösterilmeye devam eder.
+    assert await db_session.scalar(select(func.count()).select_from(OsmPoi).where(OsmPoi.tile_key == key)) == 1
+
+
+async def test_rate_limited_tiles_are_recorded_as_pending(osm_enabled, db_session):
+    async def deny():
+        return False
+
+    status = await osm_source.ensure_tiles(
+        db_session, min_lon=0.301, min_lat=0.301, max_lon=0.349, max_lat=0.349, allow_request=deny
+    )
+    assert status is ExternalStatus.UNAVAILABLE
+    tile = await db_session.get(OsmTile, osm_source.tile_key(6, 6))
+    assert tile.status == "pending" and tile.last_requested_at is not None
+    assert osm_enabled.calls == []
+
+
+async def test_refresher_completes_failed_tiles_without_user_requests(osm_enabled, db_session):
+    from app.services import osm_refresher
+
+    osm_enabled.fail = True
+    await osm_source.ensure_tiles(db_session, min_lon=0.301, min_lat=0.301, max_lon=0.349, max_lat=0.349)
+    tile = await db_session.get(OsmTile, osm_source.tile_key(6, 6))
+    assert tile.status == "failed"
+    # Bekleme süresi doldu; Overpass düzeldi. Kimse bölgeye tekrar bakmadan yenileyici tamamlar.
+    tile.retry_after = tile.retry_after.replace(year=2000)
+    # Bu test hücresi "en son istenen" olsun: yenileyici geliştirme veritabanındaki gerçek
+    # hücrelere değil, buna (ve komşularına) yönelsin.
+    tile.last_requested_at = datetime.now(UTC).replace(year=datetime.now(UTC).year + 1)
+    await db_session.commit()
+    osm_enabled.fail = False
+    osm_enabled.elements = [_node(51, 0.33, 0.33, amenity="toilets", fee="no")]
+
+    async def allow():
+        return True
+
+    assert await osm_refresher.refresh_due_tiles(fetcher=osm_enabled, allow_request=allow) >= 1
+    db_session.expire_all()
+    tile = await db_session.get(OsmTile, osm_source.tile_key(6, 6))
+    assert tile.status == "ok" and tile.attempts == 0 and tile.retry_after is None
+    assert await db_session.get(OsmPoi, f"node/{NODE_BASE + 51}") is not None
+
+
+def test_query_declares_small_maxsize_and_batches_shrink_after_failures():
+    query = osm_source.build_tile_query((36.15, 29.55, 36.25, 29.70), 15)
+    assert f"[maxsize:{settings.OVERPASS_MAX_SIZE_BYTES}]" in query and settings.OVERPASS_MAX_SIZE_BYTES <= 128 * 1024 * 1024
+    assert [osm_source.batch_size_for(n) for n in (0, 1, 2, 5)] == [6, 3, 1, 1]
+
+
+async def test_failed_area_is_retried_in_smaller_batches(osm_enabled, db_session):
+    osm_enabled.fail = True
+    await osm_source.ensure_tiles(db_session, min_lon=0.2506, min_lat=0.2506, max_lon=0.3999, max_lat=0.3499)
+    first_query = osm_enabled.calls[-1]
+    failed = (await db_session.scalars(select(OsmTile).where(OsmTile.status == "failed", OsmTile.key.like("0.0501:%")))).all()
+    assert len(failed) == 6
+    for tile in failed:
+        tile.retry_after = tile.retry_after.replace(year=2000)
+    await db_session.commit()
+    osm_enabled.fail = False
+    await osm_source.ensure_tiles(db_session, min_lon=0.2506, min_lat=0.2506, max_lon=0.3999, max_lat=0.3499)
+    db_session.expire_all()
+    ok = (await db_session.scalars(select(OsmTile).where(OsmTile.status == "ok", OsmTile.key.like("0.0501:%")))).all()
+    assert len(ok) == 3  # ilk denemede 6 hücre başarısız oldu -> ikinci deneme 3 hücrelik grup
+    assert osm_enabled.calls[-1] != first_query

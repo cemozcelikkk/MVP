@@ -31,7 +31,8 @@ const COLLAPSED_ROWS = 6;
 
 const STATUS_HINT: Partial<Record<string, string>> = {
   too_wide: "Restoran, WC ve duş harita verisi için haritayı yakınlaştırın.",
-  unavailable: "Harita verisine (OpenStreetMap) şu an ulaşılamıyor - KaravanTR kayıtları gösteriliyor.",
+  unavailable:
+    "Harita verisine (OpenStreetMap) şu an ulaşılamıyor; birkaç dakika içinde otomatik olarak tekrar deneniyor. KaravanTR kayıtları ve önbellek gösteriliyor.",
   partial: "Bölgenin harita verisi yükleniyor…",
 };
 
@@ -140,7 +141,17 @@ export default function NearbyServices({ onSelect }: Props) {
           {externalStatus && STATUS_HINT[externalStatus] ? (
             <p className="mt-3 text-xs text-text-secondary">{STATUS_HINT[externalStatus]}</p>
           ) : null}
-          {sorted.length === 0 ? (
+          {sorted.length === 0 && (externalStatus === "partial" || externalStatus === "unavailable") ? (
+            // Veri henüz gelmedi: "burada hiçbir şey yok" demek yanıltıcı olur.
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-dashed border-border-light p-4" data-testid="nearby-waiting">
+              <Loader2 size={16} className="shrink-0 animate-spin text-text-secondary" />
+              <p className="text-sm text-text-secondary">
+                {externalStatus === "partial"
+                  ? "Bu bölgenin harita verisi yükleniyor…"
+                  : "Harita verisi bekleniyor - alınınca liste kendiliğinden güncellenecek."}
+              </p>
+            </div>
+          ) : sorted.length === 0 ? (
             <div className="mt-3 rounded-xl border border-dashed border-border-light p-4" data-testid="nearby-empty">
               <p className="text-sm font-medium text-text-primary">
                 {mode === "viewport" ? "Bu alanda kayıtlı hizmet yok" : "Bu yarıçapta kayıtlı hizmet yok"}

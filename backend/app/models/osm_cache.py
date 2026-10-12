@@ -37,7 +37,14 @@ def osm_virtual_id(osm_id: str) -> uuid.UUID:
 
 
 class OsmTile(Base):
-    """Bir hücrenin son çekim durumu. `failed` hücreler `retry_after`a kadar denenmez."""
+    """Bir hücrenin çekim durumu.
+
+    - `ok`: veri önbellekte (TTL dolunca istendiğinde arka planda tazelenir; eski veri gösterilmeye devam eder).
+    - `pending`: istendi ama henüz çekilemedi (ör. sunucu geneli dakikalık sınır) - yenileyici alır.
+    - `failed`: son deneme başarısız; `retry_after`a kadar beklenir. Bekleme `attempts` ile
+      üstel büyür (1 dk, 2 dk, 4 dk ... en çok 30 dk); arka plan yenileyicisi (osm_refresher)
+      son zamanlarda istenmiş (`last_requested_at`) hücreleri kendiliğinden yeniden dener.
+    """
 
     __tablename__ = "osm_tiles"
 
@@ -46,8 +53,10 @@ class OsmTile(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     retry_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     poi_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (CheckConstraint("status IN ('ok','failed')", name="ck_osm_tiles_status"),)
+    __table_args__ = (CheckConstraint("status IN ('ok','failed','pending')", name="ck_osm_tiles_status"),)
 
 
 class OsmPoi(Base):

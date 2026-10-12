@@ -15,8 +15,13 @@ Overpass kullanım politikasına uyum (https://dev.overpass-api.de/overpass-doc/
   tekrar istek atılmaz. Tek seferde en fazla `OSM_MAX_TILES_PER_FETCH` hücre,
   bunlar TEK bir Overpass sorgusunda (kapsayan dikdörtgen) istenir.
 - Sunucu genelinde dakikada `OVERPASS_REQUESTS_PER_MINUTE` istek sınırı ve
-  süreç içi tek eşzamanlı istek; 429/504/zaman aşımında hücre `OSM_FAILURE_BACKOFF_MINUTES`
-  boyunca yeniden denenmez.
+  süreç içi tek eşzamanlı istek.
+- Kamu Overpass sunucuları ANLIK hata verir (aynı sunucu 504/500, birkaç saniye sonra 200):
+  bir hücre grubu için sunucular arasında dönülerek `OVERPASS_MAX_ATTEMPTS` deneme yapılır;
+  hata veren sunucu kısa süre sıranın sonuna alınır. Hepsi başarısızsa hücre üstel beklemeyle
+  (1 dk → 30 dk) yeniden denenir ve arka plan yenileyicisi (osm_refresher) son zamanlarda
+  istenmiş hücreleri kullanıcı beklemeden kendiliğinden tamamlar. Önbellekteki (eski) veri bu
+  sırada gösterilmeye devam eder.
 - İstekler `OVERPASS_USER_AGENT` ile kendini tanıtır.
 
 Kaynak erişilemezse çağıran taraf yalnızca KaravanTR kayıtları + cache'te
@@ -31,6 +36,7 @@ import json
 import logging
 import math
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,7 +45,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,6 +173,9 @@ def element_to_poi(element: dict[str, Any]) -> dict[str, Any] | None:
 # --- Overpass HTTP -----------------------------------------------------------------
 
 
+RETRYABLE_HTTP = frozenset({429, 500, 502, 503, 504})
+
+
 class OverpassError(Exception):
     """Overpass isteği başarısız. `retryable`: meşgul/zaman aşımı - sonra tekrar denenebilir."""
 
@@ -176,12 +185,19 @@ class OverpassError(Exception):
 
 
 def build_tile_query(bbox: tuple[float, float, float, float], timeout_s: int) -> str:
-    """Yeme & içme + sağlık + WC/duş için bbox sorgusu. `bbox` = (güney, batı, kuzey, doğu)."""
+    """Yeme & içme + sağlık + WC/duş için bbox sorgusu. `bbox` = (güney, batı, kuzey, doğu).
+
+    `[maxsize]` BİLEREK küçük: Overpass yoğunken sorguları bildirdikleri kaynağa göre kabul
+    eder; bildirilmezse 512 MB sayılır ve meşgul sunucular reddeder (ölçüm, 2026-10: aynı
+    6 hücrelik sorgu 512 MB ile 0/9, 64 MB ile 5/9 başarılı). Küçük bir alan için 64 MB
+    fazlasıyla yeterli; aşılırsa (çok yoğun şehir merkezi) yanıt hata sayılır ve hücre
+    sonraki denemede daha küçük gruplar halinde çekilir (bkz. `batch_size_for`).
+    """
     s, w, n, e = bbox
     area = f"({s:.5f},{w:.5f},{n:.5f},{e:.5f})"
     private = "|".join(PRIVATE_ACCESS)
     return f"""
-[out:json][timeout:{timeout_s}];
+[out:json][timeout:{timeout_s}][maxsize:{settings.OVERPASS_MAX_SIZE_BYTES}];
 (
   nwr["amenity"~"^(restaurant|fast_food|cafe)$"]["name"]{area};
   nwr["amenity"~"^(hospital|clinic|doctors)$"]{area};
@@ -204,7 +220,8 @@ def fetch_overpass(query: str, url: str | None = None, timeout_s: int | None = N
     except (http.client.HTTPException, ConnectionError, json.JSONDecodeError) as exc:
         raise OverpassError(f"Overpass yanıtı eksik/bozuk: {type(exc).__name__}", retryable=True) from exc
     except urllib.error.HTTPError as exc:
-        raise OverpassError(f"Overpass HTTP {exc.code}", retryable=exc.code in (429, 504)) from exc
+        # 400 = sorgu hatası (tekrar denemek anlamsız); 429/5xx kamu sunucularında geçicidir.
+        raise OverpassError(f"Overpass HTTP {exc.code}", retryable=exc.code in RETRYABLE_HTTP) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise OverpassError(f"Overpass'a bağlanılamadı: {getattr(exc, 'reason', exc)}", retryable=True) from exc
     if remark := payload.get("remark"):
@@ -213,20 +230,53 @@ def fetch_overpass(query: str, url: str | None = None, timeout_s: int | None = N
     return payload.get("elements", [])
 
 
-def fetch_overpass_with_fallback(query: str) -> list[dict[str, Any]]:
-    """Ana sunucu; meşgul/zaman aşımı ise sıradaki yedek sunucu (her biri bir kez)."""
-    urls = [settings.OVERPASS_URL, *settings.OVERPASS_FALLBACK_URLS]
+# Sunucu -> bu monotonic zamana kadar sıranın sonunda bekler (yakın zamanda hata verdi).
+_ENDPOINT_COOLDOWN: dict[str, float] = {}
+
+
+def overpass_endpoints() -> list[str]:
+    """Denenecek sunucular: önce yakın zamanda hata vermemiş olanlar (yapılandırma sırasıyla),
+    sonra soğumakta olanlar (en erken düzelecek olan önce)."""
+    urls = list(dict.fromkeys([settings.OVERPASS_URL, *settings.OVERPASS_FALLBACK_URLS]))
+    now = time.monotonic()
+    healthy = [u for u in urls if _ENDPOINT_COOLDOWN.get(u, 0.0) <= now]
+    cooling = sorted((u for u in urls if u not in healthy), key=lambda u: _ENDPOINT_COOLDOWN[u])
+    return healthy + cooling
+
+
+def fetch_overpass_with_fallback(query: str, *, sleep: Callable[[float], None] = time.sleep) -> list[dict[str, Any]]:
+    """Sunucular arasında dönerek en fazla `OVERPASS_MAX_ATTEMPTS` deneme. Her sunucu bir tur
+    denendikten sonra kısa bekleme ile ikinci tura geçilir (anlık 504/500'ler genelde birkaç
+    saniyede geçer). Sorgu hatası (400) gibi kalıcı hatalarda hemen durur."""
+    endpoints = overpass_endpoints()
+    attempts = max(settings.OVERPASS_MAX_ATTEMPTS, 1)
     last: OverpassError | None = None
-    for url in urls:
+    for attempt in range(attempts):
+        url = endpoints[attempt % len(endpoints)]
+        round_number = attempt // len(endpoints)
+        if round_number and attempt % len(endpoints) == 0:
+            sleep(settings.OVERPASS_RETRY_PAUSE_SECONDS * round_number)
         try:
-            return fetch_overpass(query, url=url)
+            elements = fetch_overpass(query, url=url)
         except OverpassError as exc:
-            logger.warning("Overpass isteği başarısız (%s): %s", url, exc)
+            logger.warning("Overpass denemesi %d/%d başarısız (%s): %s", attempt + 1, attempts, url, exc)
             last = exc
             if not exc.retryable:
                 break
+            _ENDPOINT_COOLDOWN[url] = time.monotonic() + settings.OVERPASS_ENDPOINT_COOLDOWN_SECONDS
+            continue
+        _ENDPOINT_COOLDOWN.pop(url, None)
+        if attempt:
+            logger.info("Overpass %d. denemede başarılı (%s)", attempt + 1, url)
+        return elements
     assert last is not None
     raise last
+
+
+def batch_size_for(previous_attempts: int) -> int:
+    """Daha önce başarısız olmuş hücreler daha küçük gruplarla denenir: 6 → 3 → 1.
+    Küçük sorgular meşgul Overpass sunucularından çok daha kolay geçer."""
+    return max(1, settings.OSM_MAX_TILES_PER_FETCH >> max(previous_attempts, 0))
 
 
 # --- Hücreler ----------------------------------------------------------------------
@@ -299,7 +349,14 @@ async def ensure_tiles(
 
     now = datetime.now(UTC)
     keys = {tile_key(ix, iy): (ix, iy) for ix, iy in cells}
-    todo, backing_off = await _tile_state(db, keys, now)
+    todo, backing_off, attempts = await _tile_state(db, keys, now)
+    # Güncel olmayan (çekilecek / beklemede) hücreler "istendi" olarak işaretlenir: o anda
+    # çekilemeyenleri (sınır, hata) arka plan yenileyicisi kullanıcı beklemeden tamamlar.
+    # Her şey önbellekteyse (olağan durum) hiçbir yazma yapılmaz.
+    stale_keys = {tile_key(*c) for c in todo} | backing_off
+    if stale_keys:
+        await _mark_requested(db, stale_keys)
+        await db.commit()
     todo = [c for c in todo if tile_key(*c) not in _IN_FLIGHT]
     if not todo:
         if any(k in _IN_FLIGHT for k in keys):
@@ -310,7 +367,8 @@ async def ensure_tiles(
     cx, cy = (min_lon + max_lon) / 2, (min_lat + max_lat) / 2
     step = settings.OSM_TILE_DEGREES
     todo.sort(key=lambda c: ((c[0] + 0.5) * step - cx) ** 2 + ((c[1] + 0.5) * step - cy) ** 2)
-    batch = todo[: settings.OSM_MAX_TILES_PER_FETCH]
+    # En yakın hücre daha önce başarısız olduysa grup küçültülür (6 → 3 → 1).
+    batch = todo[: batch_size_for(attempts.get(tile_key(*todo[0]), 0))]
     leftover = len(todo) > len(batch)
     batch_keys = {tile_key(*c) for c in batch}
 
@@ -322,7 +380,7 @@ async def ensure_tiles(
         return ExternalStatus.PARTIAL
 
     async with _FETCH_LOCK:
-        todo_now, _ = await _tile_state(db, {k: keys[k] for k in batch_keys}, now)
+        todo_now, _, _ = await _tile_state(db, {k: keys[k] for k in batch_keys}, now)
         if not todo_now:  # kilidi beklerken başka istek doldurmuş
             return ExternalStatus.PARTIAL if leftover else ExternalStatus.OK
         ok = await _fetch_batch(db, batch, fetcher=fetcher, allow_request=allow_request)
@@ -345,7 +403,7 @@ async def _fetch_batch_in_background(
     keys = {tile_key(*c) for c in batch}
     try:
         async with _FETCH_LOCK, AsyncSessionLocal() as db:
-            todo_now, _ = await _tile_state(db, {tile_key(*c): c for c in batch}, datetime.now(UTC))
+            todo_now, _, _ = await _tile_state(db, {tile_key(*c): c for c in batch}, datetime.now(UTC))
             if todo_now:
                 await _fetch_batch(db, todo_now, fetcher=fetcher, allow_request=allow_request)
     except Exception:  # arka plan görevi asla sessizce çökmesin
@@ -365,7 +423,10 @@ async def _fetch_batch(
     now = datetime.now(UTC)
     batch_keys = {tile_key(*c) for c in batch}
     if not await (allow_request or _allow_global_request)():
-        return False  # sunucu geneli dakikalık sınır - hücreler işaretlenmez, sonra tekrar denenir
+        # Sunucu geneli dakikalık sınır: hücreler "pending" kalır, yenileyici sonra alır.
+        await _mark_requested(db, batch_keys)
+        await db.commit()
+        return False
 
     b_min_lon = min(tile_bounds(*c)[0] for c in batch)
     b_min_lat = min(tile_bounds(*c)[1] for c in batch)
@@ -374,13 +435,9 @@ async def _fetch_batch(
     query = build_tile_query((b_min_lat, b_min_lon, b_max_lat, b_max_lon), settings.OVERPASS_TIMEOUT_SECONDS)
     try:
         elements = await asyncio.to_thread(fetcher or fetch_overpass_with_fallback, query)
-    except Exception:
-        logger.warning(
-            "OSM hücreleri çekilemedi, %s dk geri çekiliyor: %s",
-            settings.OSM_FAILURE_BACKOFF_MINUTES, sorted(batch_keys), exc_info=True,
-        )
-        retry_after = now + timedelta(minutes=settings.OSM_FAILURE_BACKOFF_MINUTES)
-        await _upsert_tiles(db, batch_keys, status="failed", retry_after=retry_after, counts={})
+    except Exception as exc:
+        logger.warning("OSM hücreleri çekilemedi (üstel beklemeyle yeniden denenecek): %s - %s", sorted(batch_keys), exc)
+        await _mark_failed(db, batch_keys)
         await db.commit()
         return False
 
@@ -404,15 +461,16 @@ async def _fetch_batch(
             "fetched_at": now,
         }
     await _replace_tile_pois(db, batch_keys, list(rows.values()), fetched_at=now)
-    await _upsert_tiles(db, batch_keys, status="ok", retry_after=None, counts=counts)
+    await _mark_ok(db, batch_keys, counts)
     await db.commit()
     return True
 
 
 async def _tile_state(
     db: AsyncSession, keys: dict[str, tuple[int, int]], now: datetime
-) -> tuple[list[tuple[int, int]], bool]:
-    """(çekilmesi gereken hücreler, geri çekilme süresinde hücre var mı)."""
+) -> tuple[list[tuple[int, int]], set[str], dict[str, int]]:
+    """(çekilmesi gereken hücreler, bekleme süresindeki hücre anahtarları, anahtar -> başarısız
+    deneme sayısı). `pending` ve bekleme süresi dolmuş `failed` hücreler çekilecekler arasındadır."""
     rows = (await db.execute(select(OsmTile).where(OsmTile.key.in_(keys)))).scalars().all()
     ttl = timedelta(hours=settings.OSM_TILE_TTL_HOURS)
     fresh = {row.key for row in rows if row.status == "ok" and row.fetched_at > now - ttl}
@@ -420,7 +478,7 @@ async def _tile_state(
         row.key for row in rows if row.status == "failed" and row.retry_after is not None and row.retry_after > now
     }
     todo = [cell for key, cell in keys.items() if key not in fresh and key not in backing_off]
-    return todo, bool(backing_off)
+    return todo, backing_off, {row.key: row.attempts for row in rows}
 
 
 async def _replace_tile_pois(db: AsyncSession, keys: set[str], rows: list[dict[str, Any]], *, fetched_at: datetime) -> None:
@@ -442,15 +500,63 @@ async def _replace_tile_pois(db: AsyncSession, keys: set[str], rows: list[dict[s
     await db.execute(delete(OsmPoi).where(OsmPoi.tile_key.in_(keys), OsmPoi.fetched_at < fetched_at))
 
 
-async def _upsert_tiles(
-    db: AsyncSession, keys: set[str], *, status: str, retry_after: datetime | None, counts: dict[str, int]
-) -> None:
-    values = [
-        {"key": key, "status": status, "fetched_at": func.now(), "retry_after": retry_after, "poi_count": counts.get(key, 0)}
-        for key in keys
-    ]
-    stmt = pg_insert(OsmTile).values(values)
-    set_ = {"status": stmt.excluded.status, "retry_after": stmt.excluded.retry_after}
-    if status == "ok":
-        set_ |= {"fetched_at": stmt.excluded.fetched_at, "poi_count": stmt.excluded.poi_count}
-    await db.execute(stmt.on_conflict_do_update(index_elements=[OsmTile.key], set_=set_))
+async def _mark_requested(db: AsyncSession, keys: set[str]) -> None:
+    """İstenen hücrelerin `last_requested_at`ını tazeler; hiç görülmemişleri `pending` ekler."""
+    stmt = pg_insert(OsmTile).values(
+        [{"key": key, "status": "pending", "last_requested_at": func.now()} for key in keys]
+    )
+    await db.execute(
+        stmt.on_conflict_do_update(index_elements=[OsmTile.key], set_={"last_requested_at": func.now()})
+    )
+
+
+def _backoff_seconds_sql(attempts):
+    """min(taban * 2^(deneme-1), azami) saniye - SQL ifadesi (`attempts` yeni deneme sayısı)."""
+    return func.least(
+        settings.OSM_RETRY_BASE_SECONDS * func.power(2, attempts - 1), settings.OSM_RETRY_MAX_SECONDS
+    )
+
+
+async def _mark_failed(db: AsyncSession, keys: set[str]) -> None:
+    """Başarısız deneme: sayaç +1, bekleme üstel büyür. Hücrenin ESKİ verisi (varsa) silinmez."""
+    one_second = literal_column("interval '1 second'")
+    stmt = pg_insert(OsmTile).values(
+        [
+            {
+                "key": key,
+                "status": "failed",
+                "attempts": 1,
+                "retry_after": func.now() + settings.OSM_RETRY_BASE_SECONDS * one_second,
+                "last_requested_at": func.now(),
+            }
+            for key in keys
+        ]
+    )
+    await db.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[OsmTile.key],
+            set_={
+                "status": "failed",
+                "attempts": OsmTile.attempts + 1,
+                "retry_after": func.now() + _backoff_seconds_sql(OsmTile.attempts + 1) * one_second,
+            },
+        )
+    )
+
+
+async def _mark_ok(db: AsyncSession, keys: set[str], counts: dict[str, int]) -> None:
+    stmt = pg_insert(OsmTile).values(
+        [{"key": key, "status": "ok", "fetched_at": func.now(), "poi_count": counts.get(key, 0)} for key in keys]
+    )
+    await db.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[OsmTile.key],
+            set_={
+                "status": "ok",
+                "fetched_at": stmt.excluded.fetched_at,
+                "poi_count": stmt.excluded.poi_count,
+                "attempts": 0,
+                "retry_after": None,
+            },
+        )
+    )

@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { fetchNearbyServicePoints, type ExternalStatus, type ServicePointFeature } from "../lib/api";
 import {
   PLACE_FILTER_META,
+  externalRetryDelay,
   formatDistance,
   placeFilterOf,
   serviceIconSvg,
@@ -21,8 +22,6 @@ import Button from "./ui/Button";
 import { Section } from "./ui/Section";
 
 const RADIUS_M = 10_000;
-// Harici kaynak çevreyi arka planda çekerken ("partial") artan aralıklarla yeniden sorulur.
-const RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000];
 const PER_CATEGORY = 2;
 
 interface Props {
@@ -49,8 +48,10 @@ export default function SpotNearbyServices({ center, title, onSelect }: Props) {
           setStatus(result.external_status);
           setFailed(false);
           // Bölge harici kaynaktan kısmen çekildiyse birkaç kez daha sor.
-          if (result.external_status === "partial" && attempts < RETRY_DELAYS_MS.length) {
-            timer = setTimeout(load, RETRY_DELAYS_MS[attempts++]);
+          const delay = externalRetryDelay(result.external_status, attempts);
+          if (delay !== null) {
+            attempts += 1;
+            timer = setTimeout(load, delay);
           }
         })
         .catch((err) => {
@@ -78,7 +79,11 @@ export default function SpotNearbyServices({ center, title, onSelect }: Props) {
       ) : failed ? (
         <p className="text-xs text-warning-rust">Yakındaki hizmetler yüklenemedi.</p>
       ) : total === 0 ? (
-        <p className="text-xs text-text-secondary">10 km içinde kayıtlı hizmet noktası bulunamadı.</p>
+        <p className="text-xs text-text-secondary">
+          {status === "partial" || status === "unavailable"
+            ? "Henüz nokta yok - harita verisi alınınca burada görünecek."
+            : "10 km içinde kayıtlı hizmet noktası bulunamadı."}
+        </p>
       ) : (
         <div className="flex flex-col gap-3" data-testid="spot-nearby-services">
           {byFilter
@@ -116,8 +121,12 @@ export default function SpotNearbyServices({ center, title, onSelect }: Props) {
             ))}
         </div>
       )}
-      {status === "unavailable" ? (
-        <p className="mt-2 text-[11px] text-text-secondary">Harita verisine ulaşılamadı; yalnızca KaravanTR kayıtları.</p>
+      {status === "unavailable" || status === "partial" ? (
+        <p className="mt-2 text-[11px] text-text-secondary">
+          {status === "partial"
+            ? "Çevrenin harita verisi yükleniyor…"
+            : "Harita verisine (OpenStreetMap) şu an ulaşılamıyor; otomatik olarak tekrar deneniyor."}
+        </p>
       ) : null}
       <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => aroundSpot(center, title)} data-testid="spot-nearby-on-map">
         <Radar size={14} />

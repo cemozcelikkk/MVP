@@ -55,7 +55,7 @@ import {
   type SpotFeature,
 } from "../lib/api";
 import { applyCategoryPinVars, hasActiveWarning, pinInnerHtml } from "../lib/pinStyle";
-import { serviceIconSvg, servicePinColors, servicePointTitle } from "../lib/servicePoints";
+import { externalRetryDelay, serviceIconSvg, servicePinColors, servicePointTitle } from "../lib/servicePoints";
 import { useAuthStore } from "../store/useAuthStore";
 import { useCreateSpotStore } from "../store/useCreateSpotStore";
 import { useFavoritesStore } from "../store/useFavoritesStore";
@@ -82,8 +82,6 @@ const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.
 
 const SPOTS_SOURCE_ID = "spots";
 const NEARBY_SOURCE_ID = "nearby-radius";
-// Harici kaynak bölgeyi arka planda çekerken ("partial") artan aralıklarla yeniden sorulur.
-const PARTIAL_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000];
 
 /** Merkez + yarıçaptan (metre) 64 köşeli daire poligonu - "Yakınımdakiler" alanı. */
 interface CircleFeature {
@@ -487,13 +485,14 @@ export default function MapView({ onSelectSpot, selectedSpotId, onSelectServiceP
         services.external_status !== "disabled";
       if (mapRef.current) setBasemapHealthVisible(mapRef.current, !healthOnLayer);
 
-      // Bölgenin bir kısmı henüz harici kaynaktan çekilmediyse kısa süre sonra yeniden sor.
+      // Harici veri henüz hazır değilse (arka planda çekiliyor / Overpass geçici olarak
+      // yanıt vermiyor) takvime göre yeniden sor - sunucudaki yenileyici bu sırada tamamlar.
       if (partialTimerRef.current) clearTimeout(partialTimerRef.current);
-      if (services.external_status === "partial" && partialRetriesRef.current < PARTIAL_RETRY_DELAYS_MS.length) {
-        const delay = PARTIAL_RETRY_DELAYS_MS[partialRetriesRef.current];
+      const delay = externalRetryDelay(services.external_status, partialRetriesRef.current);
+      if (delay !== null) {
         partialRetriesRef.current += 1;
         partialTimerRef.current = setTimeout(() => useMapDataStore.getState().retry(), delay);
-      } else if (services.external_status !== "partial") {
+      } else if (services.external_status !== "partial" && services.external_status !== "unavailable") {
         partialRetriesRef.current = 0;
       }
 

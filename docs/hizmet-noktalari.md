@@ -58,7 +58,8 @@ Yeni uçlar (`/api/v1`):
 ## OpenStreetMap verisi
 
 - Yeme & İçme, sağlık, WC, duş: bakılan bölge için 0.05° hücrelerle Overpass'tan, arka planda çekilir; harita isteği beklemez (ilk yüklemede yanıt `partial`, istemci ~50 sn boyunca artan aralıklarla yeniden sorar). Sağlık ayrıca haftalık `basemap_pois` içe aktarımından da gelir (doluysa hücre çekilmemiş bölgelerde de görünür; boş olsa da sağlık çalışır).
-- Kullanım politikası: hücre başına 7 günde bir istek, sunucu genelinde dakikada 6 istek, süreç içinde tek eşzamanlı istek, hata sonrası 15 dk bekleme, `OVERPASS_USER_AGENT` ile tanıtım. Yanıtlarda ve detayda "© OpenStreetMap katkıcıları (ODbL)" atfı.
+- Kullanım politikası: hücre başına 7 günde bir istek, sunucu genelinde dakikada 6 istek, süreç içinde tek eşzamanlı istek, `OVERPASS_USER_AGENT` ile tanıtım.
+- Kamu Overpass sunucularının anlık hataları (504/500/429): sorgular küçük bellek bildirir (`[maxsize:64MB]` - bildirilmezse 512 MB sayılır ve meşgulken reddedilir), bir istekte 3 sunucu arasında 5 deneme yapılır, hata veren sunucu 60 sn sıranın sonuna alınır. Hepsi başarısızsa hücre üstel beklemeyle (1, 2, 4 ... en çok 30 dk) ve her seferinde daha küçük gruplarla (6 → 3 → 1 hücre) yeniden denenir. Arka plan yenileyicisi (`app/services/osm_refresher.py`, 30 sn'de bir, tek süreç) son 6 saatte istenmiş başarısız hücreleri kullanıcı beklemeden tamamlar; istemci bu sırada ~5 dk boyunca sonucu yeniden sorar. Yanıtlarda ve detayda "© OpenStreetMap katkıcıları (ODbL)" atfı.
 - OSM verisi doğrulanmış/açık gibi sunulmaz ("harita verisi" etiketi, kullanılabilirlik bilgisi OSM'den alınmaz). Bir kullanıcı puan/durum/teyit/bildirim verdiğinde nokta aynı id ile `service_points`'e bağlanır.
 - Mükerrer önleme: OSM kimliği; aynı kategori ailesi + 40 m + ad benzerliği.
 - Kaynak erişilemezse KaravanTR kayıtları ve önbellek çalışmaya devam eder.

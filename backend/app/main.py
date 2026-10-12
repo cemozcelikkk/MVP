@@ -1,5 +1,9 @@
 """FastAPI uygulama giriş noktası."""
 
+import asyncio
+import contextlib
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,9 +12,27 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.http_middleware import request_middleware
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # OSM önbelleği yenileyicisi: Overpass'ın geçici hatalarında başarısız kalan hücreleri
+    # kullanıcı beklemeden tamamlar (bkz. app/services/osm_refresher.py). Birden çok worker
+    # olsa da DB advisory lock sayesinde aynı anda tek süreç iş yapar.
+    task = None
+    if settings.OSM_EXTERNAL_ENABLED and settings.OSM_REFRESH_ENABLED:
+        from app.services.osm_refresher import run_forever
+
+        task = asyncio.create_task(run_forever())
+    yield
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan,
 )
 
 app.middleware("http")(request_middleware)

@@ -72,15 +72,33 @@ class Settings(BaseSettings):
     # Kapalıysa yalnızca KaravanTR kayıtları + periyodik basemap_pois (sağlık) gösterilir.
     OSM_EXTERNAL_ENABLED: bool = True
     OVERPASS_URL: str = "https://overpass-api.de/api/interpreter"
-    # Ana sunucu meşgulken (429/504/zaman aşımı) yalnızca BİR KEZ denenecek yedek kamu sunucuları.
-    OVERPASS_FALLBACK_URLS: list[str] = ["https://overpass.kumi.systems/api/interpreter"]
+    # Yedek kamu sunucuları. Kamu Overpass sunucuları ANLIK hata verir (aynı sunucu bir istekte
+    # 504/500, birkaç saniye sonra 200) - bu yüzden tek deneme yerine sunucular arasında dönülür
+    # (bkz. osm_source.fetch_overpass_with_fallback). 2026-10: kumi.systems sürekli 500 veriyordu,
+    # listeden çıkarıldı.
+    OVERPASS_FALLBACK_URLS: list[str] = [
+        "https://overpass.private.coffee/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ]
+    # Bir hücre grubu için toplam HTTP denemesi (sunucular arasında sırayla) ve tur arası bekleme.
+    OVERPASS_MAX_ATTEMPTS: int = 5
+    OVERPASS_RETRY_PAUSE_SECONDS: float = 2.0
+    # Hata veren bir sunucu bu süre boyunca sıranın sonuna alınır (önce sağlıklı olanlar denenir).
+    OVERPASS_ENDPOINT_COOLDOWN_SECONDS: int = 60
     # Overpass kullanım politikası: istemci kendini tanıtmalı (uygulama adı + iletişim).
     OVERPASS_USER_AGENT: str = "KaravanTR/0.1 (local development)"
     # Hücre boyu (derece). 0.05° ≈ 5.5 km; bir hücre bir kez çekilip TTL boyunca cache'ten okunur.
     OSM_TILE_DEGREES: float = 0.05
     OSM_TILE_TTL_HOURS: int = 24 * 7
-    # Overpass hatasında hücre bu süre boyunca yeniden denenmez (servisi zorlamamak için).
-    OSM_FAILURE_BACKOFF_MINUTES: int = 15
+    # Overpass tamamen başarısız olursa hücre üstel beklemeyle yeniden denenir:
+    # 1 dk, 2 dk, 4 dk ... en çok 30 dk (servisi zorlamamak ama kullanıcıyı da bekletmemek için).
+    OSM_RETRY_BASE_SECONDS: int = 60
+    OSM_RETRY_MAX_SECONDS: int = 1800
+    # Arka plan yenileyicisi: son N saatte istenmiş, bekleme süresi dolmuş başarısız/bekleyen
+    # hücreleri kullanıcı isteği beklemeden kendiliğinden çeker (bkz. app/services/osm_refresher.py).
+    OSM_REFRESH_ENABLED: bool = True
+    OSM_REFRESH_INTERVAL_SECONDS: int = 30
+    OSM_REFRESH_REQUEST_WINDOW_HOURS: int = 6
     # Tek istekte çekilecek en fazla eksik hücre; fazlası sonraki isteklere kalır ("partial").
     OSM_MAX_TILES_PER_FETCH: int = 6
     # Görünür alan bundan fazla hücre kaplıyorsa harici veri istenmez (çok uzak zoom).
@@ -92,6 +110,9 @@ class Settings(BaseSettings):
     # Tüm sunucu için dakikada en fazla Overpass isteği (paylaşılan kamu servisi).
     OVERPASS_REQUESTS_PER_MINUTE: int = 6
     OVERPASS_TIMEOUT_SECONDS: int = 15
+    # Sorgunun Overpass'a bildirdiği bellek üst sınırı. Bildirilmezse 512 MB sayılır ve meşgul
+    # kamu sunucuları sorguyu reddeder (504/429) - bkz. osm_source.build_tile_query.
+    OVERPASS_MAX_SIZE_BYTES: int = 64 * 1024 * 1024
 
     FRONTEND_URL: str = "http://localhost:5173"
     MAIL_BACKEND: Literal["file", "smtp"] = "file"
